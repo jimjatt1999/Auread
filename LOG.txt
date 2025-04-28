@@ -253,4 +253,26 @@ Date: 2024-07-19 (Approximate Start of Session)
 *   Ensured all stored properties (especially file paths) are initialized in `init()` *before* calling methods that might depend on them (`loadBooks`, `loadBookmarks`, `loadHighlights`).
 *   Added missing persistence logic for highlights.
 
+**Date:** 2024-07-28 11:30 AM
+**Goal:** Fix issue where book opening resumes at chapter start instead of the exact last read location.
+
+**Issue:**
+*   The application correctly saved the overall book progress (`totalProgression`) and the chapter (`href`), but when reopening the book, it always started at the beginning of the last read chapter.
+
+**Diagnosis:**
+*   Analyzed `BookProgress.swift`, `ReaderViewModel.swift`, and `ReaderView.swift`.
+*   The `BookPosition` struct used for saving the location stored `totalProgression` and `position` (page index) but not `progression` (the fractional progress *within* the current chapter/resource).
+*   When recreating the Readium `Locator` from the saved `BookPosition` (in `BookPosition.asLocator()`), the `locations.progression` field was not being set.
+*   It's likely the Readium navigator uses `locations.progression` to determine the precise scroll position within a resource, and without it, defaults to the beginning (progression 0.0).
+
+**Fix:**
+*   Modified `Auread/Model/BookProgress.swift`:
+    *   Added `progression: Double?` property to the `BookPosition` struct.
+    *   Updated the `BookPosition(from locator: Locator)` initializer to store `locator.locations.progression`.
+    *   Updated the `asLocator()` method to set `locations.progression` using the stored value when recreating the `Locator`.
+    *   Updated logging statements to include the `progression` value.
+
+**Resolution:**
+*   By saving and restoring the `progression` within the resource, the navigator should now have the exact information needed to resume reading at the precise last location.
+
 --- 

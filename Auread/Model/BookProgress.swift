@@ -7,7 +7,8 @@ import ReadiumInternal // For anyURL extension
 struct BookPosition: Codable {
     // Store complete required information for reading position
     // Use totalProgression for overall book progress
-    var totalProgression: Double 
+    var totalProgression: Double
+    var progression: Double? // <- ADDED: Progression within the resource
     var position: Int?
     var resourceTitle: String?
     var href: String // Store the actual resource href
@@ -15,7 +16,8 @@ struct BookPosition: Codable {
     // Create from a Readium Locator
     init(from locator: Locator) {
         // Store overall book progression
-        self.totalProgression = locator.locations.totalProgression ?? 0.0 
+        self.totalProgression = locator.locations.totalProgression ?? 0.0
+        self.progression = locator.locations.progression // <- ADDED: Store resource progression
         self.position = locator.locations.position
         self.resourceTitle = locator.title
         // Store the actual resource path
@@ -32,7 +34,8 @@ struct BookPosition: Codable {
                 title: resourceTitle,
                 locations: Locator.Locations(
                     // Use totalProgression here as well
-                    totalProgression: totalProgression, 
+                    progression: progression, // <- Swapped order
+                    totalProgression: totalProgression,
                     position: position
                 )
             )
@@ -45,7 +48,8 @@ struct BookPosition: Codable {
                 title: resourceTitle,
                 locations: Locator.Locations(
                     // Use totalProgression here as well
-                    totalProgression: totalProgression, 
+                    progression: progression, // <- Swapped order
+                    totalProgression: totalProgression,
                     position: position
                 )
             )
@@ -60,8 +64,8 @@ extension BookLibrary {
         // Only save if we have a valid locator with a real resource URL
         if locator.href.string != "about:blank" {
             let position = BookPosition(from: locator)
-            // Log total progression
-            print("Saving position: \(position.href) at totalProgression \(position.totalProgression)")
+            // Log total progression AND resource progression
+            print("Saving position: \(position.href) at totalProgression \(position.totalProgression), progression \(position.progression ?? -1.0)") // <-- Updated log
             if let positionData = try? JSONEncoder().encode(position) {
                 updateBookProgress(id: bookID, locatorData: positionData)
             }
@@ -74,8 +78,8 @@ extension BookLibrary {
            let positionData = book.lastLocatorData,
            let position = try? JSONDecoder().decode(BookPosition.self, from: positionData) {
             let locator = position.asLocator()
-            // Log total progression
-            print("Restoring position: \(position.href) at totalProgression \(position.totalProgression)")
+            // Log total progression AND resource progression
+            print("Restoring position: \(position.href) at totalProgression \(position.totalProgression), progression \(position.progression ?? -1.0)") // <-- Updated log
             return locator
         }
         return nil
