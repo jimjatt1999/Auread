@@ -2,6 +2,15 @@
 
 A simple EPUB reader application for iOS built with SwiftUI and the Readium Mobile toolkit.
 
+Created by Jimi Olaoya.
+
+## How to Run
+
+1.  Clone the repository.
+2.  Open the `Auread.xcodeproj` file in Xcode.
+3.  Select a target simulator or a connected iOS device.
+4.  Click the "Run" button (or press Cmd+R).
+
 ## Features
 
 ### Implemented
@@ -9,18 +18,20 @@ A simple EPUB reader application for iOS built with SwiftUI and the Readium Mobi
 *   Import EPUB files via Document Picker.
 *   Display EPUBs using Readium Navigator.
 *   Library view with book covers, titles, authors, and progress.
-*   Basic reader controls (close, next/previous page via swipe - edge taps disabled for selection).
+*   Basic reader controls (close, next/previous page via swipe).
 *   Adjustable appearance settings (Light/Sepia/Dark themes, Font Size).
 *   Table of Contents navigation.
 *   Progress saving (saves exact location within chapter).
 *   Bookmarking (saving location with chapter title).
 *   Bookmark list display and navigation.
 *   In-book search with result highlighting.
+*   Highlighting text selections (creation, saving, loading, display).
 
 ### Planned / Ideas
 
-*   Highlighting text selections.
-*   Note-taking associated with highlights.
+*   Highlight annotation/notes.
+*   Highlight color selection.
+*   Highlight deletion.
 *   More robust error handling.
 *   Library sorting/filtering options.
 *   User accounts / Syncing (potentially via iCloud).
