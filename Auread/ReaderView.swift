@@ -20,7 +20,7 @@ struct ReaderView: View {
     // State for UI elements
     @State private var showTableOfContents = false
     @State private var showControls = true // Initially show controls
-    @State private var showOptionsMenu = false // For future options menu
+    @State private var showCustomMenuSheet = false // Replaces showOptionsMenu
     
     // State for scrubber
     @State private var sliderValue: Double = 0.0 // Value bound to slider (0.0 to 1.0)
@@ -44,7 +44,7 @@ struct ReaderView: View {
             ZStack {
                 // Conditionally show ReaderContainer or ProgressView
                 if let publication = model.publication {
-                    ReaderContainer(model: model, fileURL: fileURL, initialLocator: initialLocator ?? bookLibrary.getPosition(for: bookID))
+                    ReaderContainer(model: model, fileURL: fileURL, initialLocator: initialLocator ?? bookLibrary.getPosition(for: bookID), onTapLeft: { goToPreviousPage() }, onTapCenter: { withAnimation { showControls.toggle() } }, onTapRight: { goToNextPage() })
                         .edgesIgnoringSafeArea(.all)
                         .onChange(of: model.currentLocator) { newLocator in
                             updateSliderValueIfNeeded(locator: newLocator)
@@ -54,6 +54,8 @@ struct ReaderView: View {
                     ProgressView("Opening EPUB...")
                 }
                 
+                // --- Temporarily Comment Out Tap Zones to Allow Text Selection --- 
+                /*
                 // --- Tap Zone Overlays --- 
                 HStack(spacing: 0) {
                     // Left Tap Zone (20%)
@@ -92,64 +94,46 @@ struct ReaderView: View {
                         )
                 }
                 .edgesIgnoringSafeArea(.all) // Ensure zones cover screen edges
+                */
 
                 // --- Control Overlay --- 
+                // Display controls if showControls is true
                 if showControls {
-                    // Removed the separate tap gesture layer for controls
-                    // Add the actual controls on top
                     VStack {
-                        // Top Bar (using safe area)
+                        // NEW: Top Bar with Close Button
                         HStack {
-                            Button("Close") {
+                            Button {
                                 model.closePublication()
                                 dismiss()
-                            }
-                            .padding()
-                            Spacer()
-                            Text(model.publication?.metadata.title ?? "Reader")
-                               .font(.headline)
-                               .lineLimit(1)
-                            Spacer()
-                            Button {
-                                // Will show options menu later
-                                // For now, directly show ToC
-                                showTableOfContents = true 
                             } label: {
-                                Image(systemName: "ellipsis.circle")
-                                    .imageScale(.large)
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .padding(12) // Make tap area reasonable
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
                             }
-                            .padding()
+                            .padding([.top, .leading]) // Position top-left
+
+                            Spacer() // Pushes button left
                         }
-                        .frame(maxWidth: .infinity)
-                        .background(.thinMaterial)
-                        
-                        Spacer() // Pushes bottom controls down
-                        
-                        // Bottom Scrubber Bar (using safe area)
-                        VStack(spacing: 0) {
-                            Slider(value: $sliderValue, in: 0...1) { editing in
-                                isScrubbing = editing
-                                if !editing {
-                                    // User finished scrubbing, navigate
-                                    navigateToProgression(sliderValue)
-                                }
-                            }
-                            .tint(.primary) // Match dark text color
-                            .padding(.horizontal)
-                            
-                            // Display Page Numbers
-                            Text("\(model.currentPage ?? 1) of \(model.totalPages ?? 1)")
-                                .font(.caption)
-                                .padding(.bottom, 5)
+
+                        Spacer() // Pushes controls to bottom
+
+                        // Floating Ellipsis Button (Triggers custom sheet)
+                        Button {
+                            showCustomMenuSheet = true // Set state for custom sheet
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 20, weight: .semibold))
+                                .padding()
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
                         }
-                        .padding(.bottom) // Add padding below scrubber text
-                        .frame(maxWidth: .infinity)
-                        .background(.thinMaterial)
-                        
+                        .padding(.bottom)
+
                     } // End main VStack for controls
-                    .transition(.opacity.animation(.easeInOut(duration: 0.2))) // Fade controls in/out
-                    // Prevent taps on controls from passing through to the background tap handler
-                    .allowsHitTesting(true) 
+                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                    .allowsHitTesting(true)
                 }
                 
             } // End ZStack
@@ -174,6 +158,20 @@ struct ReaderView: View {
                 fileURL.stopAccessingSecurityScopedResource()
                 print("ReaderView: Stopped accessing security scoped resource on disappear for: \(fileURL.lastPathComponent)")
             }
+            // Present the CUSTOM menu sheet
+            .sheet(isPresented: $showCustomMenuSheet) {
+                OptionsMenuView(
+                    sliderValue: $sliderValue,
+                    isScrubbing: $isScrubbing,
+                    currentPage: model.currentPage,
+                    totalPages: model.totalPages,
+                    showTableOfContents: $showTableOfContents, // Pass binding
+                    navigateToProgression: navigateToProgression // Pass function
+                )
+                // Apply presentation detents if desired (iOS 16+)
+                 .presentationDetents([.medium, .height(280)]) // Example detents
+            }
+            // Keep existing ToC sheet
             .sheet(isPresented: $showTableOfContents) {
                 // Restore the original NavigationView for the ToC sheet
                 NavigationView {
@@ -210,7 +208,6 @@ struct ReaderView: View {
                     }
                 }
             }
-            // We handle navigation title and close button within the overlay now
             .navigationBarHidden(true)
             .navigationBarBackButtonHidden(true)
         } // End GeometryReader
@@ -286,26 +283,33 @@ struct ReaderContainer: UIViewControllerRepresentable {
     @ObservedObject var model: ReaderViewModel // Get model from parent
     let fileURL: URL
     let initialLocator: Locator? // Add initialLocator property
+    
+    // Actions passed from ReaderView
+    let onTapLeft: () -> Void
+    let onTapCenter: () -> Void
+    let onTapRight: () -> Void
 
     func makeUIViewController(context: Context) -> EPUBNavigatorViewController {
         guard let publication = model.publication else {
-            // This should ideally not happen if ReaderContainer is only shown when publication is ready
             fatalError("Publication is nil in ReaderContainer")
         }
 
-        print("ReaderContainer: Initializing navigator with locator: \(initialLocator?.locations.progression ?? -1.0)") // Log locator passed to navigator
+        print("ReaderContainer: Initializing navigator with locator: \(initialLocator?.locations.progression ?? -1.0)")
         
-        // Revert to simple init until asset opening is fixed
         let navigator = try! EPUBNavigatorViewController(
             publication: publication,
-            initialLocation: initialLocator, // Pass initialLocator here
+            initialLocation: initialLocator,
             httpServer: model.server
         )
 
-        // Set the delegate to receive location updates
         navigator.delegate = model
         
-        // Configuration removed temporarily
+        // --- Add Tap Gesture Recognizer --- 
+        let tapRecognizer = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        tapRecognizer.delegate = context.coordinator // Optional delegate for fine-tuning
+        tapRecognizer.cancelsTouchesInView = false // Allow other gestures (selection, swipe)
+        navigator.view.addGestureRecognizer(tapRecognizer)
+        // --- End Gesture Recognizer --- 
 
         return navigator
     }
@@ -314,21 +318,113 @@ struct ReaderContainer: UIViewControllerRepresentable {
         // Handle updates if necessary
     }
 
+    // Pass actions to Coordinator
     func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+        Coordinator(onTapLeft: onTapLeft, onTapCenter: onTapCenter, onTapRight: onTapRight)
     }
 
-    class Coordinator {
-        var parent: ReaderContainer
+    // Coordinator now handles taps
+    class Coordinator: NSObject, UIGestureRecognizerDelegate { // Make NSObject for @objc, Add Delegate
+        let onTapLeft: () -> Void
+        let onTapCenter: () -> Void
+        let onTapRight: () -> Void
 
-        init(_ parent: ReaderContainer) {
-            self.parent = parent
+        // Store actions
+        init(onTapLeft: @escaping () -> Void, onTapCenter: @escaping () -> Void, onTapRight: @escaping () -> Void) {
+            self.onTapLeft = onTapLeft
+            self.onTapCenter = onTapCenter
+            self.onTapRight = onTapRight
+        }
+        
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            let location = recognizer.location(in: view)
+            let screenWidth = view.bounds.width
+            let tapZoneWidth = screenWidth * 0.20 // 20% edge zones
+
+            if location.x < tapZoneWidth { // Left Zone
+                print("Coordinator Tap: Left Zone - Previous Page")
+                onTapLeft()
+            } else if location.x > screenWidth - tapZoneWidth { // Right Zone
+                print("Coordinator Tap: Right Zone - Next Page")
+                onTapRight()
+            } else { // Center Zone
+                print("Coordinator Tap: Center Zone - Toggle Controls")
+                onTapCenter()
+            }
+        }
+        
+        // Optional: UIGestureRecognizerDelegate method to allow simultaneous recognition
+        // This might be needed if Readium's internal gestures still conflict.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            // Allow our tap recognizer to work alongside others (like Readium's swipes/selection)
+            return true 
         }
 
-        deinit {
-            // No longer needed here as it's handled in onDisappear
-            // parent.fileURL.stopAccessingSecurityScopedResource()
-            // print("Coordinator: Stopped accessing security scoped resource for: \(parent.fileURL.lastPathComponent)")
+        // Deinit no longer needs to stop accessing resource
+        deinit {}
+    }
+} 
+
+// --- NEW OptionsMenuView Struct ---
+struct OptionsMenuView: View {
+    @Binding var sliderValue: Double
+    @Binding var isScrubbing: Bool
+    let currentPage: Int?
+    let totalPages: Int?
+    @Binding var showTableOfContents: Bool
+    let navigateToProgression: (Double) -> Void // Closure for navigation
+
+    @Environment(\.dismiss) var dismiss // To dismiss the sheet
+
+    var body: some View {
+        VStack(spacing: 15) {
+            // --- Slider and Page Count ---
+             VStack(spacing: 0) {
+                Slider(value: $sliderValue, in: 0...1) { editing in
+                    isScrubbing = editing
+                    if !editing {
+                        navigateToProgression(sliderValue)
+                    }
+                }
+                .tint(.primary)
+                .padding(.horizontal)
+
+                Text("\(currentPage ?? 1) of \(totalPages ?? 1)")
+                    .font(.caption)
+                    .padding(.bottom, 5)
+            }
+            .padding(.vertical, 8)
+
+            Divider()
+
+            // --- Menu Buttons ---
+            Button {
+                showTableOfContents = true
+                dismiss() // Dismiss this sheet first
+            } label: {
+                Label("Contents", systemImage: "list.bullet")
+            }
+
+            Button { /* Implement later */ } label: {
+                Label("Bookmarks & Highlights", systemImage: "bookmark") // Example icon
+            }
+
+            Button { /* Implement later */ } label: {
+                Label("Search Book", systemImage: "magnifyingglass") // Example icon
+            }
+
+            Button { /* Implement later */ } label: {
+                Label("Themes & Settings", systemImage: "textformat.size") // Example icon
+            }
+
+            Spacer() // Push content up
         }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity) // Allow background to fill sheet
+        .background(.ultraThinMaterial) // Apply frosted glass background
+        // Optional: Add a grabber indicator
+        // .overlay(alignment: .top) { Capsule().fill(.secondary).frame(width: 40, height: 5).padding(.top, 8) }
+        .buttonStyle(.borderless) // Use plain button style
     }
 } 
