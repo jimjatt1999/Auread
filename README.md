@@ -11,6 +11,8 @@ Created by Jimi Olaoya.
 3.  Select a target simulator or a connected iOS device.
 4.  Click the "Run" button (or press Cmd+R).
 
+**Note:** Active development on this project has paused due to complexities encountered with integrating certain Readium features. However, it remains a useful example and base for building a simple EPUB reader for iOS with SwiftUI and Readium.
+
 ## Features
 
 ### Implemented
