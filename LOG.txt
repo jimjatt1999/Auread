@@ -352,6 +352,17 @@ Date: 2024-07-19 (Approximate Start of Session)
 *   Button action called `model.attemptHighlightCurrentSelection()`, which internally checked `navigator.currentSelection`.
 *   **Issue:** The same persistent compiler errors reappeared when trying to call `model.attemptHighlightCurrentSelection()` from the button action, even when wrapped in a `Task { ... }`.
 
-**Conclusion:** Encountered persistent, likely build-system-related compiler errors preventing reliable access to `@StateObject model` methods/properties from `Button` actions within `ReaderView` for this specific feature. Abandoning these approaches for now.
+**Attempt 5 (Combine PassthroughSubject):**
+*   Added `PassthroughSubject` (`highlightTrigger`) to ViewModel.
+*   Subscribed to subject in ViewModel's `init` to call `attemptHighlightCurrentSelection`.
+*   Button action in `ReaderView` changed to simply call `model.highlightTrigger.send()`.
+*   **Issue:** The exact same persistent compiler errors (`Referencing subscript requires wrapper`, `no dynamic member`, `Cannot call value of non-function type Binding<Subject>`) occurred on the `model.highlightTrigger.send()` line.
+
+**Attempt 6 (Combine PassthroughSubject - Revisited):**
+*   Re-added `PassthroughSubject` (`manualHighlightTrigger`) to ViewModel and subscription.
+*   Added permanent paint palette button to top bar calling `model.manualHighlightTrigger.send()`.
+*   **Issue:** The exact same persistent compiler errors occurred again on the `.send()` call.
+
+**Decision:** Abandoning attempts to trigger highlighting via direct button actions (standard, Task, Combine) or custom menus within `ReaderView` due to persistent, blocking compiler errors related to accessing the `@StateObject model`. This indicates a likely Xcode build system or SwiftUI/UIViewControllerRepresentable integration bug within this project's context. Highlighting triggered *from user text selection interaction* is currently blocked.
 
 --- 

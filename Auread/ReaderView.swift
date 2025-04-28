@@ -102,7 +102,7 @@ struct ReaderView: View {
                 // Display controls if showControls is true
                 if showControls {
                     VStack {
-                        // NEW: Top Bar with Close, Highlight, and Bookmark Buttons
+                        // Top Bar with Close, Highlight, and Bookmark Buttons
                         HStack {
                             Button {
                             model.closePublication()

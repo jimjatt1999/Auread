@@ -36,20 +36,22 @@ class ReaderViewModel: NSObject, ObservableObject, Loggable, EPUBNavigatorDelega
     @Published var tappedHighlightID: String?
     @Published var tappedHighlightFrame: CGRect?
 
+    // Keep cancellables if needed for settings or other things
+    private var cancellables = Set<AnyCancellable>()
+
     init(bookID: UUID, bookLibrary: BookLibrary, settingsManager: SettingsManager) {
         self.bookID = bookID
         self.bookLibrary = bookLibrary
         self.settingsManager = settingsManager
         super.init()
         
+        // Subscribe to settings changes
         settingsManager.$currentSettings
              .sink { [weak self] newSettings in
                  self?.applySettings(newSettings)
              }
              .store(in: &cancellables)
     }
-
-    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Publication Loading
     func openPublication(at url: URL, initialLocator: Locator?) {
@@ -122,27 +124,28 @@ class ReaderViewModel: NSObject, ObservableObject, Loggable, EPUBNavigatorDelega
          }
      }
 
-    // MARK: - Highlight Creation
+    // MARK: - Highlight Creation (Triggered Indirectly)
     
-    // Renamed slightly for clarity (was attemptHighlightCurrentSelection)
-    // This method is called by the top bar button now (if we keep it)
-    // OR potentially remove this if the top bar button is removed.
-    func highlightDirectlyFromCurrentSelection() { 
-        // ... (Implementation from previous attemptHighlightCurrentSelection can stay here if needed)
-        // ... or remove this method if the top bar button is also removed ...
-        print("Highlighting directly from current selection (if any)...")
-        guard let navigator = self.navigator as? SelectableNavigator else { return }
+    // This method is called indirectly via the manualHighlightTrigger subject
+    // It attempts to highlight whatever text is currently selected in the navigator
+    func attemptHighlightCurrentSelection() {
+        guard let navigator = self.navigator as? SelectableNavigator else {
+            print("ViewModel Error: Navigator is not selectable or not available.")
+            return
+        }
         if let selection = navigator.currentSelection {
+            print("ViewModel: Found selection to highlight: \(selection.locator)")
             Task {
                 await createHighlightFromSelection(locator: selection.locator)
                 await navigator.clearSelection()
+                print("ViewModel: Highlight created and selection cleared.")
             }
         } else {
-            print("No selection found for direct highlight.")
+            print("ViewModel: Attempted to highlight, but no text is currently selected.")
         }
     }
 
-    // Existing highlight creation logic (now called by createHighlightFromStoredSelection)
+    // Existing highlight creation logic (now called by attemptHighlightCurrentSelection)
     @MainActor
     func createHighlightFromSelection(locator: Locator) async {
         print("ViewModel: Creating highlight from selection: \(locator)")
