@@ -11,6 +11,8 @@ Created by Jimi Olaoya.
 3.  Select a target simulator or a connected iOS device.
 4.  Click the "Run" button (or press Cmd+R).
 
+    *   **Dependency Note:** If you encounter issues resolving the Readium dependency via Swift Package Manager using the URL, try cloning the [Readium Swift Toolkit repository](https://github.com/readium/swift-toolkit) locally. Add the cloned directory as a local Swift Package dependency in Xcode instead.
+
 **Note:** Active development on this project has paused due to complexities encountered with integrating certain Readium features. However, it remains a useful example and base for building a simple EPUB reader for iOS with SwiftUI and Readium.
 
 ## Features
