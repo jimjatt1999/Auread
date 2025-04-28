@@ -10,6 +10,7 @@ struct HomeView: View {
     // @AppStorage("books") private var booksData: Data = Data()
     // @State private var books: [Book] = [] // Use Book directly
     @EnvironmentObject var bookLibrary: BookLibrary
+    @EnvironmentObject var settingsManager: SettingsManager // Add settings manager
 
     @State private var documentPickerIsPresented = false
     @State private var selectedBookForReader: Book? // Use Book directly
@@ -107,8 +108,10 @@ struct HomeView: View {
                 if let url = book.getURL() {
                     // Get the initial locator from BookLibrary
                     let initialLocator = bookLibrary.getPosition(for: book.id)
-                    ReaderView(fileURL: url, bookID: book.id, bookLibrary: bookLibrary, initialLocator: initialLocator)
+                    // Pass settingsManager to ReaderView initializer
+                    ReaderView(fileURL: url, bookID: book.id, bookLibrary: bookLibrary, settingsManager: settingsManager, initialLocator: initialLocator)
                         .environmentObject(bookLibrary)
+                        .environmentObject(settingsManager) // Also pass to environment if needed downstream
                 } else {
                     // Handle error: Could not resolve URL from bookmark
                     Text("Error: Could not open book. Please try importing it again.")

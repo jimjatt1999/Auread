@@ -1,0 +1,256 @@
+Auread Project Development Log
+================================
+
+Date: 2024-07-20
+
+== Appearance Settings Implementation ==
+
+*   Goal: Implement basic reader appearance settings (theme, font size), inspired by Shiori Reader models.
+*   Models:
+    *   Created `AppearanceSettings.swift`: Defines `ReaderTheme` enum (Light, Sepia, Dark) and `AppearanceSettings` struct (stores theme raw value, font size float).
+    *   Created `SettingsManager.swift`: ObservableObject using `@AppStorage` to persist `AppearanceSettings` as JSON data. Loads defaults if no saved data. Provides `updateTheme` and `updateFontSize` methods.
+*   Integration:
+    *   Injected `SettingsManager` into SwiftUI environment in `AureadApp.swift`.
+    *   Modified `ReaderViewModel.swift`: 
+        *   Requires `SettingsManager` in initializer.
+        *   Observes `settingsManager.$currentSettings` using Combine `sink`.
+        *   Added `applySettings(_:)` method to update Readium navigator's appearance (`editingActions.setAppearance`) and font size (`editingActions.setProperty(key: .fontSize, ...)`).
+        *   Calls `applySettings` initially from `navigator(_:viewDidAppear:)` and whenever settings change.
+    *   Modified `ReaderView.swift`:
+        *   Retrieves `SettingsManager` from environment.
+        *   Passes `SettingsManager` to `ReaderViewModel` initializer.
+        *   Passes `SettingsManager` to `OptionsMenuView` initializer.
+        *   Updated `OptionsMenuView`:
+            *   Added segmented picker bound to `settingsManager.currentSettings.theme`.
+            *   Added +/- buttons and text display for font size, calling `settingsManager.updateFontSize`.
+            *   Adjusted sheet height presentation detent.
+    *   Modified `HomeView.swift`: Passes `SettingsManager` from environment to `ReaderView` initializer.
+*   Result: User can now change theme (Light/Sepia/Dark) and font size (50%-250%) via the options menu (...) in the reader, and changes are applied live and persist.
+
+Date: 2024-07-19 (Approximate Start of Session)
+
+== ReaderView Initial Implementation & Fixes ==
+
+*   Goal: Implement EPUB reader view using Readium, handle progress saving.
+*   Initial Setup: Integrated EPUBNavigatorViewController within ReaderView.swift using ReaderContainer.
+*   Issue: Type mismatch for Navigator Delegate (`ReaderViewModel.swift`).
+    *   Fix: Changed ReaderViewModel conformance to EPUBNavigatorDelegate.
+*   Issue: Placeholder code in delegate methods (`ReaderViewModel.swift`) and ToC navigation (`ReaderView.swift`).
+    *   Fix: Added basic error logging; fixed link resolution (`publication.locate`).
+*   Issue: Progress saving/restoring not working; empty Table of Contents (`ReaderView.swift`).
+    *   Diagnosis: Incorrect timing for ToC fetch; initial locator not passed correctly; delegate `locationDidChange` not updating state reliably.
+    *   Attempt 1: Moved ToC fetch to ViewModel (`ReaderViewModel.swift`), passed initial locator during navigator init (`ReaderContainer`). Delegate not set.
+    *   Attempt 2: Restored delegate setting (`ReaderContainer`). Saving failed (threading suspected).
+    *   Attempt 3: Dispatched locator update to main thread (`ReaderViewModel.locationDidChange`).
+    *   Attempt 4 (Successful Persistence): Moved saving logic into `locationDidChange`; passed BookLibrary/bookID to `ReaderViewModel` init.
+*   Issue: Crash due to accessing @EnvironmentObject BookLibrary in `ReaderViewModel.init`.
+    *   Fix: Refactored `ReaderView.swift` and `ReaderViewModel.swift` to pass BookLibrary explicitly during init.
+*   Issue: `Locator` not `Codable`, preventing saving via JSONEncoder (`BookLibrary.swift`).
+    *   Discovery: Found `BookProgress.swift` with `Codable BookPosition` struct and `BookLibrary` extension.
+    *   Fix: Removed redundant save/load methods from `BookLibrary.swift`, used existing extension methods.
+*   Issue: Progress saving reset after app force-quit (`BookLibrary.swift`).
+    *   Diagnosis: Suspected `@AppStorage` reliability issue.
+    *   Attempt 1: Added logging, `UserDefaults.synchronize()`. No fix.
+    *   Fix: Replaced `@AppStorage` with direct file writing (`library.json`) in `BookLibrary.saveBooks/loadBooks`.
+
+== ReaderView UI Enhancements & Gesture Handling (`ReaderView.swift`) ==
+
+*   Goal: Add progress indicator to `HomeView.swift`, enhance `ReaderView.swift` controls.
+*   Feature: Added progress bar/text to `BookItemView.swift`.
+    *   Added `getProgression()` method to `BookLibrary` extension (`BookProgress.swift`).
+*   Issue: Progress bar showed 0% after ToC navigation.
+    *   Fix: Adjusted `BookItemView.swift` condition `progress >= 0`.
+*   Feature: Redesigned ReaderView controls:
+    *   Replaced `NavigationView` with custom overlay.
+    *   Added bottom scrubber slider bound to `totalProgression`.
+    *   Added tap-to-toggle controls logic (center tap).
+    *   Added floating ellipsis button triggering options `.actionSheet`.
+    *   Added top-left close button.
+*   Issue: Custom SwiftUI gestures conflicted with Readium's internal gestures.
+    *   Attempt 1 (Swipe): Removed custom `DragGesture`, relied on Readium. (Success).
+    *   Attempt 2 (Tap): Moved `.onTapGesture` to `ReaderContainer`. (Failure: Blocked gestures).
+    *   Attempt 3-5 (Tap): Tried various overlays (`Color.clear`, zoned `HStack`, `.highPriorityGesture`). (Failure: Blocked swipes).
+    *   Fix (Successful Tap/Swipe Coexistence): Implemented tap handling via `UIGestureRecognizer` in `ReaderContainer.Coordinator`.
+        *   Set `cancelsTouchesInView = false`.
+        *   Used `shouldRecognizeSimultaneouslyWith` delegate.
+*   Issue: Tap page turns prevented long-press text selection.
+    *   Fix: Temporarily disabled edge tap actions (`onTapLeft/onTapRight`) in `Coordinator.handleTap`.
+*   Feature: Integrated slider into custom menu sheet (`OptionsMenuView`) triggered by ellipsis.
+    *   Removed bottom scrubber bar.
+    *   Added frosted glass effect (`.ultraThinMaterial`) to menu sheet and ellipsis button.
+
+== Bookmarking ==
+
+*   Goal: Implement bookmarking functionality.
+*   Models: Created `Bookmark.swift`, `Highlight.swift`. Added `bookmarks`/`highlights` arrays to `Book.swift`.
+*   Library: Added `add/get/deleteBookmark`, `add/getHighlight`, `findBookmark` functions to `BookLibrary.swift`.
+*   UI (`ReaderView.swift`):
+    *   Added toggle bookmark button to controls overlay.
+    *   Added `BookmarksHighlightsView.swift` sheet, presented from `OptionsMenuView`.
+    *   Implemented navigation from bookmark list to reader location.
+*   ViewModel (`ReaderViewModel.swift`):
+    *   Added `@Published isCurrentLocationBookmarked`.
+    *   Updated `locationDidChange` to check bookmark status.
+*   Issue: Duplicate bookmarks could be added.
+    *   Fix: Added check in `BookLibrary.addBookmark` using `findBookmark`.
+*   Issue: Bookmark button didn't reflect current state.
+    *   Fix: Updated button icon and action to toggle based on `isCurrentLocationBookmarked`.
+*   Issue: Highlighting requires deeper integration with text selection menu (deferred).
+
+**Date:** 2024-07-28 10:25 AM
+**Goal:** Fix scope errors for Readium Navigator types in `ReaderViewModel.swift`.
+
+**Changes:**
+*   **`Auread/Auread/ReaderViewModel.swift`:**
+    *   Modified the `applySettings` function.
+    *   Added explicit `ReadiumNavigator.` namespace prefix to `Preferences`, `BoolPreference`, `FloatPreference`, and the keys `.dark`, `.sepia`, and `.fontSize`.
+    *   This resolves compiler errors where these types/keys couldn't be found or inferred despite the `import ReadiumNavigator` statement.
+
+**Issues Encountered:**
+*   Compiler errors persisted for Readium types in `ReaderViewModel.swift` even after cleaning the build folder.
+
+**Resolution:**
+*   Applied explicit namespacing (`ReadiumNavigator.TypeName`) to the relevant types and keys within the `applySettings` function.
+
+**Date:** 2024-07-28 10:15 AM
+**Goal:** Fix compiler errors related to settings initialization and potentially Readium Navigator types.
+
+**Changes:**
+*   **`Auread/Model/SettingsManager.swift`:**
+    *   Modified `init()` in both `SettingsManager` and `RefinedSettingsManager`.
+    *   Changed initialization logic to first load data directly from `UserDefaults.standard.data(forKey: "appearanceSettings")`.
+    *   This avoids accessing the `@AppStorage` property wrapper (which uses `self` implicitly) before all stored properties (`currentSettings`) are fully initialized.
+    *   Initialized `currentSettings` (or `_currentSettings`) *after* loading the data.
+    *   Ensured Combine setup (in `SettingsManager`) or `didSet` observer (in `RefinedSettingsManager`) activates only *after* initialization is complete.
+*   **`Auread/Auread/ReaderViewModel.swift`:**
+    *   Confirmed `import ReadiumNavigator` was already present.
+    *   Compiler errors related to `Preferences`, `BoolPreference`, etc., likely stemmed from Xcode build cache issues or potentially needing explicit namespacing (`ReadiumNavigator.Preferences`). User advised to clean build folder first.
+
+**Issues Encountered:**
+*   Persistent `'self' used in property access 'settingsData' before all stored properties are initialized` errors in `SettingsManager.swift` initializers.
+*   Compiler errors finding Readium Navigator types (`Preferences`, etc.) in `ReaderViewModel.swift` despite the correct import statement.
+
+**Resolution:**
+*   Refactored initializers in `SettingsManager.swift` to load from `UserDefaults` directly before initializing other properties.
+*   Advised user to clean Xcode build folder (Shift+Cmd+K) to address potential stale errors regarding Readium types. Next step if errors persist is to add explicit namespacing.
+
+**Date:** 2024-07-28 10:35 AM
+**Goal:** Fix compiler errors in `ReaderViewModel.swift` related to applying appearance settings.
+
+**Changes:**
+*   **`Auread/Auread/ReaderViewModel.swift`:**
+    *   Refactored the `applySettings` function.
+    *   Removed the use of generic `Preferences`, `BoolPreference`, and `FloatPreference` types.
+    *   Now directly initializes `ReadiumNavigator.EPUBPreferences`.
+    *   Maps the local `ReaderTheme` enum to the expected `ReadiumNavigator.Theme` enum (`.light`, `.sepia`, `.dark`).
+    *   Sets the `fontSize` property in the initializer, converting the `Float` from `AppearanceSettings` to `Double`.
+    *   Submits the constructed `EPUBPreferences` object to `navigator.submitPreferences`.
+
+**Issues Encountered:**
+*   Previous attempts using generic `Preferences` with different namespaces (`ReadiumNavigator`, `ReadiumShared`) failed, indicating these types/keys were incorrect or deprecated for the `submitPreferences` API.
+
+**Resolution:**
+*   Switched to using the specific `ReadiumNavigator.EPUBPreferences` type, aligning with documentation about the newer preferences API.
+
+**Date:** 2024-07-28 10:40 AM
+**Goal:** Fix app entry point to show the main `HomeView` instead of the default `ContentView`.
+
+**Changes:**
+*   **`Auread/AureadApp.swift`:**
+    *   Changed the view presented inside the `WindowGroup` from `ContentView()` to `HomeView()`.
+
+**Issues Encountered:**
+*   The application was displaying the placeholder "Hello, world!" (`ContentView`) upon launch.
+
+**Resolution:**
+*   Updated `AureadApp.swift` to present `HomeView` as the root view, ensuring the correct initial UI is displayed.
+
+**Date:** 2024-07-28 10:50 AM
+**Goal:** Improve bookmark toggle logic to be more robust and responsive.
+
+**Changes:**
+*   **`Auread/ReaderView.swift`:**
+    *   Modified the action closure for the bookmark button.
+    *   Instead of solely relying on the potentially stale `model.isCurrentLocationBookmarked` state, the action now explicitly calls `bookLibrary.findBookmark(near:)` using the `model.currentLocator` *at the moment the button is tapped*.
+    *   If `findBookmark` returns an existing bookmark, it's deleted; otherwise, a new bookmark is added.
+    *   The `model.isCurrentLocationBookmarked` state is now updated *immediately* within the button action after adding or deleting, ensuring the button's visual state (`bookmark` vs `bookmark.fill`) updates instantly.
+
+**Issues Encountered:**
+*   The previous bookmark toggle logic could be unreliable due to potential race conditions or delays between location changes, state updates (`isCurrentLocationBookmarked`), and button taps.
+
+**Resolution:**
+*   Made the bookmark button action idempotent by re-checking the actual bookmark status on tap and updating the UI state immediately for better responsiveness and accuracy.
+
+**Date:** 2024-07-28 11:05 AM
+**Goal:** Improve bookmark display name by saving and showing the chapter title.
+
+**Changes:**
+*   **`Auread/Model/Bookmark.swift`:** Added `chapterTitle: String?` property to the struct.
+*   **`Auread/Model/BookLibrary.swift`:**
+    *   Updated `addBookmark` function to accept an optional `title: String?` parameter and save it to the new `Bookmark.chapterTitle`.
+    *   Refactored bookmark storage to use a top-level `@Published var bookmarks: [Bookmark]` array in `BookLibrary` instead of nested arrays within `Book` objects.
+    *   Added `saveBookmarks()` and `loadBookmarks()` methods for dedicated persistence of the top-level array.
+    *   Added a `dataLock` (NSLock) for thread safety around bookmark array modifications.
+    *   Updated `getBookmarks` and `deleteBookmark` to work with the top-level array and lock.
+    *   Updated `findBookmark` to decode the full `Locator` from `locatorData` for comparison (previously assumed `BookPosition`).
+*   **`Auread/Auread/ReaderViewModel.swift`:**
+    *   Added `@Published var currentChapterTitle: String?`.
+    *   Updated `navigator(_:locationDidChange:)` to set `currentChapterTitle = locator.title`.
+*   **`Auread/ReaderView.swift`:** Updated the `addBookmark` call in the bookmark button action to pass `model.currentChapterTitle`.
+*   **`Auread/BookmarksHighlightsView.swift`:**
+    *   Updated `BookmarkRow` view.
+    *   Added `displayTitle` computed property to show `bookmark.chapterTitle` preferentially, falling back to `locator.title` (decoded from `locatorData`), then "Unknown Chapter".
+    *   Added `displaySubtitle` computed property to show page number or progression, falling back to creation date.
+
+**Issues Encountered:**
+*   Bookmarks were often displayed with generic titles like "Untitled" because the `locator.title` provided by Readium wasn't always available or accurate when the bookmark was created/saved.
+*   Original `Bookmark` struct in the user's code was slightly different than assumed (used `locatorData`, `creationDate`).
+*   Bookmark persistence logic was previously tied to saving the whole `BookLibrary` (which saved `Book` objects containing bookmark arrays). This was refactored for clarity and potentially better performance.
+
+**Resolution:**
+*   Captured the `locator.title` available at the time of bookmark creation and stored it explicitly in the `Bookmark` object.
+*   Updated the display logic to use this stored title, improving the user experience in the bookmarks list.
+*   Refactored bookmark storage and persistence to be handled directly by `BookLibrary` using a dedicated array and save/load functions, improving separation of concerns and adding thread safety.
+
+**Date:** 2024-07-28 11:15 AM
+**Goal:** Fix bookmark saving/loading and display issues caused by attempting to directly encode/decode non-Codable `Locator`.
+
+**Changes:**
+*   **`Auread/Model/BookLibrary.swift`:**
+    *   Modified `addBookmark`: Now creates a `Codable` `BookPosition` from the `Locator` and encodes *that* into the `locatorData` field of the `Bookmark`. It also uses the explicitly passed `title` first, falling back to `position.resourceTitle` if the passed title is nil.
+    *   Modified `findBookmark`: Now decodes `BookPosition` from the stored `locatorData` and compares properties (`href`, `totalProgression`) to find nearby bookmarks.
+*   **`Auread/BookmarksHighlightsView.swift`:**
+    *   Added `decodePosition` helper to safely decode `BookPosition` from `Data`.
+    *   Updated `BookmarkRow`: `displayTitle` helper now uses `bookmark.chapterTitle` first, then falls back to the title from the decoded `BookPosition` (`position.resourceTitle`), then "Unknown Chapter". `displaySubtitle` helper uses `position.position` (page) or `position.totalProgression` from the decoded `BookPosition`.
+    *   Updated `handleItemSelection`: Decodes `BookPosition` from the `locatorData` and then calls `position.asLocator()` to get the `Locator` object required for navigation.
+    *   Fixed date formatting in `displaySubtitle`: Changed `Text(..., style: .date)` to `Text(bookmark.creationDate.formatted(date: .abbreviated, time: .omitted))`.
+
+**Issues Encountered:**
+*   Compiler errors indicated `Locator` does not conform to `Decodable`, preventing direct JSON encoding/decoding.
+*   Compiler errors indicated incorrect usage of `style: .date` for `Text` date formatting.
+
+**Resolution:**
+*   Reverted bookmark persistence logic to use the `Codable` `BookPosition` struct (assumed to exist from prior work) for storing location data, instead of attempting to encode the entire `Locator`.
+*   Updated bookmark display logic to decode `BookPosition` and use its properties along with the explicitly saved `chapterTitle`.
+*   Corrected date formatting syntax using the `.formatted()` modifier.
+
+**Date:** 2024-07-28 11:25 AM
+**Goal:** Fix initialization errors in `BookLibrary.swift`.
+
+**Changes:**
+*   **`Auread/Model/BookLibrary.swift`:**
+    *   Modified `init()`:
+        *   Determines file paths for bookmarks and highlights and assigns them to `self.bookmarksFilePath` and `self.highlightsFilePath` *before* calling any load methods.
+        *   Calls `loadBooks()`, `loadBookmarks()`, and the newly added `loadHighlights()` *after* all stored properties have been initialized.
+    *   Added `saveHighlights()` and `loadHighlights()` methods for dedicated persistence of the top-level `highlights` array.
+    *   Updated `addHighlight`, `getHighlights`, and added `deleteHighlight` to use the top-level `highlights` array and the `dataLock` for thread safety, mirroring the bookmark logic.
+
+**Issues Encountered:**
+*   Compiler errors: `'self' used in method call 'loadBooks' before all stored properties are initialized` and `Return from initializer without initializing all stored properties`.
+*   This was because `loadBooks()` was called before `bookmarksFilePath` and `highlightsFilePath` were initialized.
+
+**Resolution:**
+*   Ensured all stored properties (especially file paths) are initialized in `init()` *before* calling methods that might depend on them (`loadBooks`, `loadBookmarks`, `loadHighlights`).
+*   Added missing persistence logic for highlights.
+
+--- 
