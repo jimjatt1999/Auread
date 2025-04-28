@@ -9,8 +9,8 @@ import Combine
 import UIKit
 
 // ViewModel to handle Readium logic
-// Conform to EPUBNavigatorDelegate
-class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
+// Conform to EPUBNavigatorDelegate, SearchDelegate?
+class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
     
     // MARK: - Published Properties
     @Published var publication: Publication?
@@ -20,6 +20,18 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
     @Published var totalPages: Int? = nil // Track total page count
     @Published var isCurrentLocationBookmarked: Bool = false // Track bookmark status
     @Published var currentChapterTitle: String? = nil // Track title for current locator
+
+    // Search State
+    @Published var searchQuery: String = ""
+    @Published var searchResults: [Locator] = []
+    @Published var isSearching: Bool = false
+    @Published var activeSearchHighlightID: String? = nil // ID of the currently active search highlight decoration
+    @Published var searchResultCount: Int? = nil // Optional total count from iterator
+
+    // Highlight Interaction State
+    @Published var tappedHighlightID: String? = nil
+    @Published var tappedHighlightFrame: CGRect? = nil
+    @Published var showHighlightMenu: Bool = false
 
     // MARK: - Stored Properties
     private let bookID: UUID
@@ -32,6 +44,11 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
     let opener: PublicationOpener
     let httpClient: HTTPClient // Needed for AssetRetriever
     let assets: AssetRetriever // Needed?
+
+    // Search Internals
+    private var searchIterator: SearchIterator?
+    private var currentSearchTask: Task<Void, Never>?
+    private var currentLoadPageTask: Task<Void, Never>?
 
     // MARK: - Initialization
     init(bookID: UUID, bookLibrary: BookLibrary, settingsManager: SettingsManager) {
@@ -134,6 +151,10 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
     }
 
     func closePublication() {
+        // Clear any remaining highlights from view
+        clearAllUserHighlights()
+        clearSearchHighlight()
+        
         publication = nil
         currentLocator = nil
         currentPage = nil // Reset page numbers
@@ -181,6 +202,11 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
     func navigator(_ navigator: UIViewController & Navigator, viewDidAppear animated: Bool) {
         print("ReaderViewModel: Navigator viewDidAppear, applying initial settings...")
         applySettings(settingsManager.currentSettings)
+        
+        Task {
+             // Load existing user highlights
+             await loadAllUserHighlights()
+        }
     }
     
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
@@ -208,6 +234,26 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
         print("Navigator presented error: \(error)")
     }
     
+    // MARK: - VisualNavigatorDelegate Methods (Optional)
+    
+    // Called when the user taps the publication content.
+    func navigator(_ navigator: VisualNavigator, didTapAt point: CGPoint) {
+        // We receive the tap point in the navigator's view coordinate system.
+        log(.info, "User tapped content at point: \(point)")
+        
+        // --- TODO: Check if this tap hit an existing highlight decoration --- 
+        // This is the complex part. We need to:
+        // 1. Get the currently visible highlight decorations and their frames.
+        //    OR use JavaScript to detect the tapped element's ID.
+        // 2. Check if `point` intersects with any highlight frame.
+        // 3. If it does, get the highlight ID and call handleHighlightTap(id: frame:).
+        
+        // For now, just logging the tap.
+        // If the tap *didn't* hit a highlight, maybe we want to toggle controls?
+        // This might conflict with the center tap zone logic in ReaderView's Coordinator.
+        // Needs careful consideration of gesture handling priority.
+    }
+    
     // MARK: - Helpers
     var navigatorViewController: EPUBNavigatorViewController? {
         guard let keyWindow = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
@@ -217,10 +263,370 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
         return keyWindow.rootViewController?.findViewController(ofType: EPUBNavigatorViewController.self)
     }
     
+    // MARK: - Search Functionality
+
+    func beginSearch() {
+        // Cancel any previous search tasks
+        currentSearchTask?.cancel()
+        currentLoadPageTask?.cancel()
+        searchIterator?.close() // Close previous iterator if any
+        searchIterator = nil
+
+        // Clear previous results and state
+        clearSearchHighlight() // Remove visual highlight
+        Task { @MainActor in // Ensure UI updates happen on main thread
+            self.searchResults = []
+            self.searchResultCount = nil
+            self.activeSearchHighlightID = nil
+        }
+        
+        guard let pub = publication, !searchQuery.isEmpty else {
+            log(.warning, "Search query is empty or publication is not loaded.")
+            Task { @MainActor in self.isSearching = false }
+            return
+        }
+        
+        Task { @MainActor in self.isSearching = true }
+
+        currentSearchTask = Task {
+            do {
+                let iteratorResult = await pub.search(query: searchQuery)
+                let iterator = try iteratorResult.get() // Use .get() to extract iterator or throw error
+                log(.info, "Search started for query: \(searchQuery)")
+                // Check for cancellation after await
+                try Task.checkCancellation()
+                
+                // Store iterator and load first page
+                self.searchIterator = iterator
+                await loadNextSearchResultsPage(reset: true) // Load first page (reset results)
+                
+                // Update total count if available AFTER first page load
+                if let count = await iterator.resultCount {
+                    Task { @MainActor in self.searchResultCount = count }
+                }
+                
+            } catch is CancellationError {
+                log(.info, "Search task cancelled for query: \(searchQuery)")
+                searchIterator?.close() // Ensure iterator is closed on cancellation
+                self.searchIterator = nil
+            } catch {
+                log(.error, "Error starting search for query \(searchQuery): \(error)")
+            }            
+            // Ensure searching state is reset regardless of success/failure/cancellation
+            Task { @MainActor in self.isSearching = false }
+        }
+    }
+
+    func loadNextSearchResultsPage(reset: Bool = false) async {
+        guard let iterator = searchIterator else {
+            log(.warning, "Attempted to load next page but searchIterator is nil.")
+            return
+        }
+        
+        // Prevent concurrent page loads
+        guard currentLoadPageTask == nil else {
+            log(.info, "Page load already in progress.")
+            return
+        }
+
+        currentLoadPageTask = Task {
+            do {
+                log(.info, "Loading next search results page...")
+                let collectionResult = await iterator.next()
+                let collection = try collectionResult.get() // Use .get() to extract LocatorCollection? or throw error
+                // Check for cancellation after await
+                try Task.checkCancellation()
+
+                // Update results on main thread
+                await MainActor.run {
+                    if reset {
+                        self.searchResults = collection?.locators ?? []
+                    } else {
+                        self.searchResults.append(contentsOf: collection?.locators ?? [])
+                    }
+                    log(.info, "Loaded \(collection?.locators.count ?? 0) new search results. Total: \(self.searchResults.count)")
+                }
+                
+                // Update total count if it has changed
+                if let count = await iterator.resultCount, count != self.searchResultCount {
+                    Task { @MainActor in self.searchResultCount = count }
+                }
+
+            } catch is CancellationError {
+                log(.info, "Search page load task cancelled.")
+            } catch {
+                log(.error, "Error loading next search results page: \(error)")
+            }
+            // Reset task tracker
+            currentLoadPageTask = nil
+        }
+        // Wait for the page load task to finish
+        await currentLoadPageTask?.value
+    }
+
+    func cancelSearch() {
+        log(.info, "Cancelling search.")
+        currentSearchTask?.cancel()
+        currentLoadPageTask?.cancel()
+        searchIterator?.close()
+        searchIterator = nil
+        clearSearchHighlight()
+        Task { @MainActor in
+            self.searchResults = []
+            self.searchQuery = ""
+            self.searchResultCount = nil
+            self.activeSearchHighlightID = nil
+            self.isSearching = false
+        }
+    }
+
+    func navigateToSearchResult(locator: Locator, id: String) async {
+        guard let navigator = navigatorViewController else {
+            log(.error, "Navigator not available for search result navigation.")
+            return
+        }
+        
+        log(.info, "Navigating to search result: \(id) at \(locator.href)")
+        
+        // Navigate first
+        let success = await navigator.go(to: locator)
+        
+        // Apply highlight AFTER navigation (if successful)
+        if success {
+            Task { @MainActor in // Ensure UI update on main thread
+                 // Clear previous highlight before applying new one
+                 self.clearSearchHighlight()
+                 self.activeSearchHighlightID = id
+                 self.applySearchHighlight(locator: locator, id: id)
+            }
+        } else {
+            log(.warning, "Navigation to search result \(id) failed.")
+        }
+    }
+
+    private func applySearchHighlight(locator: Locator, id: String) {
+        guard let navigator = navigatorViewController else { return }
+        
+        log(.info, "Applying search highlight decoration: \(id)")
+        let style = Decoration.Style.highlight(tint: .yellow.withAlphaComponent(0.5), isActive: true) // Use a semi-transparent yellow
+        let decoration = Decoration(id: id, locator: locator, style: style)
+        
+        Task {
+            do {
+                // Apply decoration in the "search" group
+                try await navigator.apply(decorations: [decoration], in: "search") // Use in: label
+            } catch {
+                log(.error, "Failed to apply search highlight decoration \(id): \(error)")
+            }
+        }
+    }
+
+    func clearSearchHighlight() {
+        guard let navigator = navigatorViewController else { return }
+        log(.info, "Clearing search highlight decorations.")
+        Task {
+            do {
+                // Clear decorations in the "search" group
+                try await navigator.apply(decorations: [], in: "search") // Use in: label
+                await MainActor.run { self.activeSearchHighlightID = nil } // Clear ID on main thread
+            } catch {
+                log(.error, "Failed to clear search highlight decorations: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Highlighting Functionality
+
+    // Called from Coordinator when "Highlight" menu item is tapped
+    func createHighlightFromSelection(locator: Locator) async {
+        // Extract selected text from locator (fallback needed?)
+        let selectedText = locator.text.highlight ?? ""
+        guard !selectedText.isEmpty else {
+            log(.warning, "Cannot create highlight with empty selected text.")
+            return
+        }
+        
+        // Create the new Highlight object (using default color for now)
+        let newHighlight = Highlight(
+            bookID: self.bookID, 
+            locatorData: BookPosition(from: locator).encode() ?? Data(), // Encode BookPosition
+            selectedText: selectedText
+            // color: uses default "yellow"
+            // note: uses default nil
+        )
+
+        // Save it via BookLibrary
+        bookLibrary.addHighlight(
+            for: newHighlight.bookID, 
+            locator: locator, // Original locator needed here for BookPosition conversion inside addHighlight
+            text: newHighlight.selectedText
+            // Use default color and note
+        )
+
+        // Apply the decoration immediately
+        applyHighlightDecoration(highlight: newHighlight)
+    }
+    
+    // Applies a single highlight decoration
+    private func applyHighlightDecoration(highlight: Highlight) {
+        guard let navigator = navigatorViewController else { return }
+        guard let position = BookPosition.decode(from: highlight.locatorData) else {
+             log(.error, "Failed to decode BookPosition for highlight \(highlight.id)")
+             return
+        }
+
+        let locator = position.asLocator() // Get Locator from BookPosition
+        let color = UIColor(named: highlight.color) ?? .yellow // Use named color or fallback
+        
+        log(.info, "Applying user highlight decoration: \(highlight.id)")
+        let style = Decoration.Style.highlight(tint: color.withAlphaComponent(0.4), isActive: true) // Slightly less alpha than search?
+        let decoration = Decoration(id: highlight.id.uuidString, locator: locator, style: style)
+        
+        Task {
+            do {
+                // Apply decoration in the "userHighlights" group
+                try await navigator.apply(decorations: [decoration], in: "userHighlights")
+            } catch {
+                log(.error, "Failed to apply user highlight decoration \(highlight.id): \(error)")
+            }
+        }
+    }
+
+    // Loads and applies all existing highlights for the current book
+    func loadAllUserHighlights() async {
+        guard let navigator = navigatorViewController else { return }
+
+        let highlights = bookLibrary.getHighlights(for: bookID)
+        log(.info, "Loading \(highlights.count) user highlights for book \(bookID)")
+        guard !highlights.isEmpty else { 
+            // Ensure any stale decorations are cleared if there are no highlights
+            Task {
+                 try? await navigator.apply(decorations: [], in: "userHighlights")
+            }
+            return
+        }
+
+        var decorations: [Decoration] = []
+        for highlight in highlights {
+            if let position = BookPosition.decode(from: highlight.locatorData) {
+                let locator = position.asLocator()
+                let color = UIColor(named: highlight.color) ?? .yellow
+                let style = Decoration.Style.highlight(tint: color.withAlphaComponent(0.4), isActive: true)
+                 decorations.append(Decoration(id: highlight.id.uuidString, locator: locator, style: style))
+            } else {
+                log(.error, "Failed to decode BookPosition for highlight \(highlight.id) during bulk load.")
+            }
+        }
+        
+        log(.info, "Applying \(decorations.count) user highlight decorations in bulk.")
+        Task {
+            do {
+                // Apply all decorations at once in the "userHighlights" group
+                try await navigator.apply(decorations: decorations, in: "userHighlights")
+            } catch {
+                log(.error, "Failed to apply bulk user highlight decorations: \(error)")
+            }
+        }
+    }
+    
+    // Clears all user highlight decorations (e.g., when closing book)
+    func clearAllUserHighlights() {
+        guard let navigator = navigatorViewController else { return }
+        log(.info, "Clearing all user highlight decorations.")
+        Task {
+            do {
+                try await navigator.apply(decorations: [], in: "userHighlights")
+            } catch {
+                 log(.error, "Failed to clear user highlight decorations: \(error)")
+            }
+        }
+    }
+    
+    // TODO: Add methods for handling taps on highlights (requires delegate method)
+    // TODO: Add methods for updating highlight color/note and deleting highlights
+    
     // MARK: - Deinit
     deinit {
         print("ReaderViewModel deinit.")
         settingsCancellable?.cancel()
+    }
+
+    // MARK: - Highlight Interaction
+    func handleHighlightTap(id: String, frame: CGRect?) {
+         log(.debug, "Handling tap for highlight ID: \(id)")
+         // TODO: Fetch the highlight details from BookLibrary if needed
+         // For now, just set state to show a generic menu
+         Task { @MainActor in
+             self.tappedHighlightID = id
+             self.tappedHighlightFrame = frame
+             self.showHighlightMenu = true
+         }
+     }
+
+    // Called by UI when the highlight menu should be dismissed
+     func dismissHighlightMenu() {
+         Task { @MainActor in
+             self.showHighlightMenu = false
+             self.tappedHighlightID = nil
+             self.tappedHighlightFrame = nil
+         }
+     }
+     
+    // Placeholder functions for menu actions (to be implemented)
+     func changeHighlightColor(id: String, newColor: String) {
+         guard let uuid = UUID(uuidString: id) else { return }
+         log(.info, "Request to change color for \(id) to \(newColor)")
+         bookLibrary.updateHighlight(id: uuid, newColor: newColor)
+         // Need to re-apply the specific decoration or all highlights
+         // For simplicity now, reload all
+         Task { await loadAllUserHighlights() } 
+         dismissHighlightMenu()
+     }
+     
+     func addNoteToHighlight(id: String, note: String) {
+         guard let uuid = UUID(uuidString: id) else { return }
+         log(.info, "Request to add note to \(id): \(note)")
+         bookLibrary.updateHighlight(id: uuid, newNote: note)
+          // Potentially update decoration style? For now, just save.
+         Task { await loadAllUserHighlights() } // Reload to potentially show note icon later
+         dismissHighlightMenu()
+     }
+     
+     func deleteHighlight(id: String) {
+         guard let uuid = UUID(uuidString: id) else { return }
+         log(.info, "Request to delete highlight \(id)")
+         bookLibrary.deleteHighlight(id: uuid)
+         // Remove the specific decoration
+         Task {
+             // Apply an empty array to the group to clear it, then reload remaining.
+             // Alternatively, just reload all, which will omit the deleted one.
+             // try? await navigatorViewController?.apply(decorations: [], in: "userHighlights") // Clear all first?
+             await loadAllUserHighlights() // Reload remaining highlights
+         }
+         dismissHighlightMenu()
+     }
+
+    // MARK: - @objc Actions for Editing Menu
+
+    @objc func handleHighlightSelection(_ sender: Any?) {
+        guard let navigator = navigatorViewController else {
+            log(.error, "Navigator not found for highlight action.")
+            return
+        }
+        
+        // Get the current text selection from the navigator
+        Task {
+             // Access currentSelection as a property, not an async func
+             if let selection = navigator.currentSelection {
+                 log(.info, "Highlight action tapped for selection: \(selection.locator)")
+                 // Call ViewModel method to create the highlight
+                 await self.createHighlightFromSelection(locator: selection.locator)
+                 // Clear the selection in the webview
+                 await navigator.clearSelection()
+             } else {
+                 log(.warning, "Highlight action tapped but no selection found.")
+             }
+        }
     }
 }
 
@@ -253,3 +659,29 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate {
 //         return nil
 //     }
 // }
+
+// --- ADDED Helpers for BookPosition encoding/decoding ---
+// It might be better to place these in BookProgress.swift
+extension BookPosition {
+    func encode() -> Data? {
+        try? JSONEncoder().encode(self)
+    }
+
+    static func decode(from data: Data) -> BookPosition? {
+        try? JSONDecoder().decode(BookPosition.self, from: data)
+    }
+}
+
+// Helper to get UIColor from name (needs color assets or more robust mapping)
+extension UIColor {
+    convenience init?(named name: String) {
+        // Simple mapping for now - expand or use Color Assets
+        switch name.lowercased() {
+        case "yellow": self.init(red: 1.0, green: 1.0, blue: 0.0, alpha: 1.0)
+        case "blue": self.init(red: 0.0, green: 0.0, blue: 1.0, alpha: 1.0)
+        case "green": self.init(red: 0.0, green: 1.0, blue: 0.0, alpha: 1.0)
+        case "pink": self.init(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0) // Magenta as Pink
+        default: return nil // Fallback if name not found
+        }
+    }
+}

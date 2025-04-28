@@ -275,4 +275,83 @@ Date: 2024-07-19 (Approximate Start of Session)
 **Resolution:**
 *   By saving and restoring the `progression` within the resource, the navigator should now have the exact information needed to resume reading at the precise last location.
 
+**Date:** 2024-07-28 12:00 PM
+**Goal:** Implement in-book search functionality with result highlighting.
+
+**Changes:**
+*   **`Auread/Auread/ReaderViewModel.swift`:**
+    *   Added state variables (`searchQuery`, `searchResults`, `isSearching`, `activeSearchHighlightID`, `searchResultCount`).
+    *   Added internal properties (`searchIterator`, `currentSearchTask`, `currentLoadPageTask`).
+    *   Implemented `beginSearch()`: Initiates search using `publication.search()`, gets `SearchIterator`.
+    *   Implemented `loadNextSearchResultsPage()`: Loads the next page of results from `SearchIterator`.
+    *   Implemented `cancelSearch()`: Cancels tasks, closes iterator, clears state and highlights.
+    *   Implemented `navigateToSearchResult()`: Navigates to the `Locator` using `navigator.go(to:)` and then calls `applySearchHighlight()`.
+    *   Implemented `applySearchHighlight()`: Creates a `Decoration` with `.highlight` style and applies it using `navigator.apply(decorations:inGroup:)`.
+    *   Implemented `clearSearchHighlight()`: Calls `navigator.apply([], inGroup: "search")`.
+*   **`Auread/SearchView.swift` (New File):**
+    *   Created a new SwiftUI view to handle search UI.
+    *   Includes `TextField` for input, bound to `ReaderViewModel.searchQuery`.
+    *   Displays results in a `List`, using `SearchResultRow`.
+    *   `SearchResultRow` shows context (`locator.text`) and bolds the highlighted term.
+    *   Handles triggering search (`beginSearch`), pagination (`loadNextSearchResultsPage`), navigation (`navigateToSearchResult`), and cancellation (`cancelSearch`).
+*   **`Auread/ReaderView.swift`:**
+    *   Added `@State private var showSearchView`.
+    *   Added a `.sheet(isPresented: $showSearchView)` modifier to present `SearchView`.
+    *   Modified `OptionsMenuView` to accept `$showSearchView` binding.
+    *   Updated the "Search" button action in `OptionsMenuView` to set `showSearchView = true` and dismiss the options menu.
+
+**Issues Encountered:**
+*   Initial code search didn't find specific `publication.search()` or `navigator.applyDecorations()` methods, requiring a web search.
+*   Web search confirmed the existence and general usage pattern of Readium's `SearchIterator` and Decoration API.
+
+**Resolution:**
+*   Implemented search using the asynchronous `SearchIterator` pattern.
+*   Implemented result highlighting using the Decoration API (`navigator.apply`).
+*   Created a dedicated `SearchView` for the user interface.
+*   Integrated the `SearchView` presentation into `ReaderView` via the options menu.
+
+**Date:** 2024-07-28 12:15 PM
+**Goal:** Confirm search feature works and log completion.
+
+**Status:**
+*   User confirmed that the search functionality (entering query, seeing results, navigating, and highlighting) is working as expected.
+*   The highlight applied from search results persists until the search is cancelled or a new search is performed.
+
+**Goal:** Remove unused `navigator(_:didTapHighlight:)` function from `ReaderViewModel.swift`.
+
+**Actions:**
+*   Attempted to remove the function using `edit_file` with context lines, but failed due to file reading errors.
+*   Attempted to remove the function using `edit_file` by providing the exact function signature, but the apply model reported no changes.
+*   Used `grep_search` to locate the function signature `func navigator(_ navigator: Navigator, didTapHighlight annotation: HighlightAnnotation)`.
+
+**Result:** `grep_search` reported no matches, indicating the function was already absent or removed previously. Task considered complete.
+
+**Date:** 2024-07-28 (Afternoon/Evening)
+**Goal:** Implement user-triggered text highlighting.
+
+**Attempt 1 (EditingAction):**
+*   Added custom `EditingAction` ("Highlight") to `EPUBNavigatorViewController.Configuration` targeting a method in `ReaderContainer.Coordinator`.
+*   **Issue:** "Highlight" option did not appear in the text selection menu, or tapping it did not trigger the Coordinator method (no logs).
+
+**Attempt 2 (EditingAction - ViewModel Target):**
+*   Moved the `@objc func handleHighlightSelection` method to `ReaderViewModel`.
+*   Updated the `#selector` in the `EditingAction` to target the ViewModel method.
+*   **Issue:** Still did not work; action likely not triggered or reachable in responder chain.
+
+**Attempt 3 (Conditional Floating Button):**
+*   Used `navigator(_:didSelect:)` delegate in ViewModel to track `currentSelectionInfo` state.
+*   Added a floating button to `ReaderView` visible only when `model.currentSelectionInfo != nil`.
+*   Button action called `model.createHighlightForCurrentSelection()`.
+*   **Issue:** Persistent, inexplicable compiler errors (`Referencing subscript 'subscript(dynamicMember:)' requires wrapper...`, `Value of type 'ReaderViewModel' has no dynamic member...`) when accessing `model.currentSelectionInfo` in the `if` condition, despite cleaning build folder and deleting DerivedData.
+*   **Workaround Tried:** Using `.onReceive(model.$currentSelectionInfo)` to update a local `@State` variable and using *that* for the `if` condition.
+*   **Issue:** Compiler errors shifted to the `.onReceive` modifier and the button's action closure (`Cannot call value of non-function type 'Binding<Subject>'`).
+
+**Attempt 4 (Explicit Top Bar Button):**
+*   Removed selection tracking state from ViewModel.
+*   Added a *permanent* highlight button to the top bar in `ReaderView`.
+*   Button action called `model.attemptHighlightCurrentSelection()`, which internally checked `navigator.currentSelection`.
+*   **Issue:** The same persistent compiler errors reappeared when trying to call `model.attemptHighlightCurrentSelection()` from the button action, even when wrapped in a `Task { ... }`.
+
+**Conclusion:** Encountered persistent, likely build-system-related compiler errors preventing reliable access to `@StateObject model` methods/properties from `Button` actions within `ReaderView` for this specific feature. Abandoning these approaches for now.
+
 --- 

@@ -277,7 +277,8 @@ class BookLibrary: ObservableObject {
     }
 
     // Placeholder - Actual highlighting needs text selection interaction
-    func addHighlight(for bookID: UUID, locator: Locator, text: String) {
+    // Updated to accept color and note
+    func addHighlight(for bookID: UUID, locator: Locator, text: String, color: String = Highlight.defaultColor, note: String? = nil) {
         // Find the book index - although maybe highlights shouldn't be tied to the book object?
         // For now, let's assume highlights are managed in the top-level array like bookmarks.
         // guard let index = books.firstIndex(where: { $0.id == bookID }) else { return }
@@ -286,8 +287,8 @@ class BookLibrary: ObservableObject {
         if locator.href.string != "about:blank" {
             let position = BookPosition(from: locator)
             if let locatorData = try? JSONEncoder().encode(position) {
-                // Create the Highlight object
-                let newHighlight = Highlight(bookID: bookID, locatorData: locatorData, selectedText: text)
+                // Create the Highlight object with color and note
+                let newHighlight = Highlight(bookID: bookID, locatorData: locatorData, selectedText: text, color: color, note: note)
                 
                 // Add to the top-level highlights array
                 dataLock.lock()
@@ -311,6 +312,32 @@ class BookLibrary: ObservableObject {
         dataLock.lock()
         defer { dataLock.unlock() }
         return highlights.filter { $0.bookID == bookID }
+    }
+
+    // Function to get a specific highlight by its ID
+    func getHighlight(id: UUID) -> Highlight? {
+        dataLock.lock()
+        defer { dataLock.unlock() }
+        return highlights.first { $0.id == id }
+    }
+
+    // Function to update an existing highlight (color and/or note)
+    func updateHighlight(id: UUID, newColor: String? = nil, newNote: String? = nil) {
+        dataLock.lock()
+        defer { dataLock.unlock() }
+        
+        if let index = highlights.firstIndex(where: { $0.id == id }) {
+            if let color = newColor {
+                highlights[index].color = color
+            }
+            // Update note (setting to nil clears it)
+            highlights[index].note = newNote
+            
+            print("Highlight updated: \(id)")
+            saveHighlights() // Save changes after update
+        } else {
+            print("Highlight update failed: ID not found \(id)")
+        }
     }
     
     // TODO: Add deleteHighlight function later

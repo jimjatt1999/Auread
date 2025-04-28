@@ -23,6 +23,7 @@ struct ReaderView: View {
     @State private var showControls = true // Initially show controls
     @State private var showBookmarksHighlights = false // State for Bookmarks/Highlights sheet
     @State private var showCustomMenuSheet = false // Replaces showOptionsMenu
+    @State private var showSearchView = false // <- ADDED: State for presenting Search View
     
     // State for scrubber
     @State private var sliderValue: Double = 0.0 // Value bound to slider (0.0 to 1.0)
@@ -101,7 +102,7 @@ struct ReaderView: View {
                 // Display controls if showControls is true
                 if showControls {
                     VStack {
-                        // NEW: Top Bar with Close Button
+                        // NEW: Top Bar with Close, Highlight, and Bookmark Buttons
                         HStack {
                             Button {
                             model.closePublication()
@@ -115,9 +116,9 @@ struct ReaderView: View {
                             }
                             .padding([.top, .leading]) // Position top-left
 
-                            Spacer() // Pushes button left
+                            Spacer() // Pushes buttons to sides
 
-                            // NEW: Bookmark Button (Toggle Action)
+                            // Existing Bookmark Button (Toggle Action)
                             Button {
                                 guard let currentLocator = model.currentLocator else {
                                     print("Cannot toggle bookmark, current location unknown.")
@@ -154,17 +155,22 @@ struct ReaderView: View {
 
                         Spacer() // Pushes controls to bottom
 
-                        // Floating Ellipsis Button (Triggers custom sheet)
-                        Button {
-                            showCustomMenuSheet = true // Set state for custom sheet
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 20, weight: .semibold))
-                                .padding()
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
-                        }
-                        .padding(.bottom)
+                        HStack(alignment: .bottom) { // Use HStack to place buttons side-by-side
+                            Spacer() // Push buttons to the right
+
+                            // Existing Floating Ellipsis Button (Triggers custom sheet)
+                            Button {
+                                showCustomMenuSheet = true // Set state for custom sheet
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .padding()
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
+                            }
+                            .padding(.bottom)
+
+                        } // End HStack for bottom buttons
 
                     } // End main VStack for controls
                     .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -204,6 +210,7 @@ struct ReaderView: View {
                     totalPages: model.totalPages,
                     showTableOfContents: $showTableOfContents, 
                     showBookmarksHighlights: $showBookmarksHighlights,
+                    showSearchView: $showSearchView, // <- ADDED: Pass binding
                     navigateToProgression: navigateToProgression 
                 )
                  .presentationDetents([.height(320)]) // Adjust height for new controls
@@ -262,6 +269,28 @@ struct ReaderView: View {
                 }
                 .environmentObject(bookLibrary) // Pass BookLibrary
             }
+            // --- ADDED: Search Sheet ---
+            .sheet(isPresented: $showSearchView) {
+                 SearchView(model: model) // Pass the ReaderViewModel
+             }
+            // --- ADDED: Highlight Options Popover --- 
+            // This uses a simple overlay + popover approach. 
+            // A more sophisticated solution might use UIViewControllerRepresentable 
+            // to present a UIMenu directly at the tapped location.
+             .overlay(alignment: .topLeading) { // Use overlay to position relative to ZStack
+                 // Invisible anchor view for popover positioning
+                 // Position this view based on the tappedHighlightFrame
+                 if model.showHighlightMenu, let frame = model.tappedHighlightFrame {
+                     Color.clear
+                          .frame(width: frame.width, height: frame.height)
+                          .offset(x: frame.origin.x, y: frame.origin.y)
+                          .popover(isPresented: $model.showHighlightMenu, arrowEdge: .bottom) { // Present popover from bottom
+                               HighlightOptionsMenu(model: model)
+                          }
+                 } else {
+                     EmptyView()
+                 }
+             }
             .navigationBarHidden(true)
             .navigationBarBackButtonHidden(true)
         } // End GeometryReader
@@ -337,66 +366,88 @@ struct ReaderContainer: UIViewControllerRepresentable {
     @ObservedObject var model: ReaderViewModel // Get model from parent
     let fileURL: URL
     let initialLocator: Locator? // Add initialLocator property
-    
+
     // Actions passed from ReaderView
     let onTapLeft: () -> Void
     let onTapCenter: () -> Void
     let onTapRight: () -> Void
+
+    // --- REMOVED Subclass Definition ---
+    // class MyEPUBNavigatorViewController: EPUBNavigatorViewController { ... }
+    // --- END REMOVED Subclass Definition ---
 
     func makeUIViewController(context: Context) -> EPUBNavigatorViewController {
         guard let publication = model.publication else {
             fatalError("Publication is nil in ReaderContainer")
         }
 
-        print("ReaderContainer: Initializing navigator with locator: \(initialLocator?.locations.progression ?? -1.0)")
-        
+        print("ReaderContainer: Initializing standard navigator with locator: \(initialLocator?.locations.progression ?? -1.0)")
+
+        // --- REMOVED Configuration for EditingAction ---
+        // let config = EPUBNavigatorViewController.Configuration(editingActions: ...)
+        // --- END REMOVED ---
+
+        // Initialize with default config or only necessary non-editing config
+        let config = EPUBNavigatorViewController.Configuration()
+
         let navigator = try! EPUBNavigatorViewController(
             publication: publication,
             initialLocation: initialLocator,
+            config: config, // <-- Use default or basic config
             httpServer: model.server
         )
 
         navigator.delegate = model
-        
-        // --- Add Tap Gesture Recognizer --- 
+
+        // --- Add Tap Gesture Recognizer ---
         let tapRecognizer = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        tapRecognizer.delegate = context.coordinator // Optional delegate for fine-tuning
-        tapRecognizer.cancelsTouchesInView = false // Allow other gestures (selection, swipe)
+        tapRecognizer.delegate = context.coordinator
+        tapRecognizer.cancelsTouchesInView = false
         navigator.view.addGestureRecognizer(tapRecognizer)
-        // --- End Gesture Recognizer --- 
+        // --- End Gesture Recognizer ---
+
+        // Assign the navigator instance to the coordinator
+        context.coordinator.navigatorViewController = navigator
 
         return navigator
     }
 
+    // Update to expect the standard class type
     func updateUIViewController(_ uiViewController: EPUBNavigatorViewController, context: Context) {
-        // Handle updates if necessary
+        // Ensure coordinator link is maintained if needed
+        // uiViewController.readerCoordinator = context.coordinator // REMOVED
+        context.coordinator.navigatorViewController = uiViewController // Keep coordinator's reference up-to-date
     }
 
     // Pass actions to Coordinator
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTapLeft: onTapLeft, onTapCenter: onTapCenter, onTapRight: onTapRight)
+        Coordinator(model: model, onTapLeft: onTapLeft, onTapCenter: onTapCenter, onTapRight: onTapRight) // Pass model
     }
 
-    // Coordinator now handles taps
-    class Coordinator: NSObject, UIGestureRecognizerDelegate { // Make NSObject for @objc, Add Delegate
+    // Coordinator now handles taps and holds model + navigator ref
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let model: ReaderViewModel
         let onTapLeft: () -> Void
         let onTapCenter: () -> Void
         let onTapRight: () -> Void
+        // Keep a weak reference to the navigator
+        weak var navigatorViewController: EPUBNavigatorViewController? // <-- Changed type
 
-        // Store actions
-        init(onTapLeft: @escaping () -> Void, onTapCenter: @escaping () -> Void, onTapRight: @escaping () -> Void) {
+        // Store actions and model
+        init(model: ReaderViewModel, onTapLeft: @escaping () -> Void, onTapCenter: @escaping () -> Void, onTapRight: @escaping () -> Void) {
+            self.model = model
             self.onTapLeft = onTapLeft
             self.onTapCenter = onTapCenter
             self.onTapRight = onTapRight
         }
-        
+
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
             guard let view = recognizer.view else { return }
             let location = recognizer.location(in: view)
             let screenWidth = view.bounds.width
             let tapZoneWidth = screenWidth * 0.20 // 20% edge zones
 
-            // --- Temporarily disable edge taps to allow long-press selection --- 
+            // --- Temporarily disable edge taps to allow long-press selection ---
             if location.x < tapZoneWidth { // Left Zone
                 print("Coordinator Tap: Left Zone - Ignored to allow selection")
                 // onTapLeft() // Disabled
@@ -408,16 +459,16 @@ struct ReaderContainer: UIViewControllerRepresentable {
                 onTapCenter()
             }
         }
-        
+
         // Optional: UIGestureRecognizerDelegate method to allow simultaneous recognition
-        // This might be needed if Readium's internal gestures still conflict.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            // Allow our tap recognizer to work alongside others (like Readium's swipes/selection)
-            return true 
+            return true
         }
 
-        // Deinit no longer needs to stop accessing resource
-        deinit {}
+        // --- REMOVED: Action handler moved to ReaderViewModel --- 
+        // @objc func handleHighlightSelection(_ sender: Any?) { ... }
+         // --- END REMOVED --- 
+
     }
 } 
 
@@ -430,6 +481,7 @@ struct OptionsMenuView: View {
     let totalPages: Int?
     @Binding var showTableOfContents: Bool
     @Binding var showBookmarksHighlights: Bool // Add binding
+    @Binding var showSearchView: Bool // <- ADDED: Binding for search view presentation
     let navigateToProgression: (Double) -> Void // Closure for navigation
 
     @Environment(\.dismiss) var dismiss // To dismiss the sheet
@@ -445,6 +497,7 @@ struct OptionsMenuView: View {
          totalPages: Int?,
          showTableOfContents: Binding<Bool>,
          showBookmarksHighlights: Binding<Bool>,
+         showSearchView: Binding<Bool>, // <- ADDED
          navigateToProgression: @escaping (Double) -> Void) {
         self.settingsManager = settingsManager
         self._sliderValue = sliderValue
@@ -453,6 +506,7 @@ struct OptionsMenuView: View {
         self.totalPages = totalPages
         self._showTableOfContents = showTableOfContents
         self._showBookmarksHighlights = showBookmarksHighlights
+        self._showSearchView = showSearchView // <- ADDED
         self.navigateToProgression = navigateToProgression
         // Initialize the local state with the current setting
         _currentFontSize = State(initialValue: settingsManager.currentSettings.fontSize)
@@ -538,9 +592,12 @@ struct OptionsMenuView: View {
                     Label("Bookmarks", systemImage: "bookmark") // Simplified label
                 }
                 Spacer()
-                Button { /* Implement later */ } label: {
+                Button { 
+                     showSearchView = true // <- MODIFIED: Set state to true
+                     dismiss() // Dismiss this sheet first
+                 } label: {
                     Label("Search", systemImage: "magnifyingglass") // Simplified label
-                }.disabled(true)
+                }
             }
             .padding(.horizontal)
 
@@ -553,5 +610,70 @@ struct OptionsMenuView: View {
         // Apply the selected theme's background color to the sheet itself
         // .background(settingsManager.currentSettings.readerTheme.backgroundColor)
         // .colorScheme(settingsManager.currentSettings.readerTheme == .dark ? .dark : .light) // Adjust color scheme
+    }
+} 
+
+// --- ADDED: Highlight Options Menu View ---
+struct HighlightOptionsMenu: View {
+    @ObservedObject var model: ReaderViewModel
+    
+    // Sample colors (match the names in UIColor extension)
+    let availableColors = ["yellow", "blue", "green", "pink"]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Color Selection
+            HStack {
+                Text("Color:").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                ForEach(availableColors, id: \.self) { colorName in
+                    Button { 
+                        if let id = model.tappedHighlightID {
+                             model.changeHighlightColor(id: id, newColor: colorName)
+                        }
+                    } label: {
+                        Circle()
+                            .fill(Color(uiColor: UIColor(named: colorName) ?? .clear))
+                            .frame(width: 20, height: 20)
+                            .overlay(Circle().stroke(Color.gray, lineWidth: 1))
+                    }
+                }
+            }
+            .padding()
+            
+            Divider()
+            
+            // Actions
+            Button { 
+                // TODO: Implement note adding UI
+                print("Add/Edit Note Tapped - UI NYI")
+                // if let id = model.tappedHighlightID {
+                //     model.addNoteToHighlight(id: id, note: "Sample Note")
+                // }
+                 model.dismissHighlightMenu()
+            } label: {
+                Label("Add/Edit Note", systemImage: "note.text.badge.plus")
+            }
+            .padding()
+            
+             Divider()
+            
+             Button(role: .destructive) { 
+                 if let id = model.tappedHighlightID {
+                     model.deleteHighlight(id: id)
+                 }
+             } label: {
+                 Label("Delete Highlight", systemImage: "trash")
+             }
+             .padding()
+        }
+        .buttonStyle(.plain) // Ensure buttons are tappable inside popover
+        .frame(minWidth: 180) // Give the popover some minimum width
+        .background(.regularMaterial) // Background for popover
+        .cornerRadius(10)
+         .onDisappear { 
+             // Ensure menu state is reset if popover is dismissed interactively
+             model.dismissHighlightMenu()
+         }
     }
 } 

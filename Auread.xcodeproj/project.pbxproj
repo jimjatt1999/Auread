@@ -24,9 +24,22 @@
 		F9C0555B2DBF47BB00FD3E05 /* Auread.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Auread.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F9529DF52DBFE735007E057E /* Exceptions for "Auread" folder in "Auread" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				ReaderViewModel.swift,
+			);
+			target = F9C0555A2DBF47BB00FD3E05 /* Auread */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		F9C0555D2DBF47BB00FD3E05 /* Auread */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F9529DF52DBFE735007E057E /* Exceptions for "Auread" folder in "Auread" target */,
+			);
 			path = Auread;
 			sourceTree = "<group>";
 		};
