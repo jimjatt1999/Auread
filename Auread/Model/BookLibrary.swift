@@ -276,19 +276,20 @@ class BookLibrary: ObservableObject {
         }
     }
 
-    // Placeholder - Actual highlighting needs text selection interaction
-    // Updated to accept color and note
+    // Add a new highlight with the given properties
     func addHighlight(for bookID: UUID, locator: Locator, text: String, color: String = Highlight.defaultColor, note: String? = nil) {
-        // Find the book index - although maybe highlights shouldn't be tied to the book object?
-        // For now, let's assume highlights are managed in the top-level array like bookmarks.
-        // guard let index = books.firstIndex(where: { $0.id == bookID }) else { return }
-        
         // Create BookPosition and encode it
         if locator.href.string != "about:blank" {
             let position = BookPosition(from: locator)
             if let locatorData = try? JSONEncoder().encode(position) {
                 // Create the Highlight object with color and note
-                let newHighlight = Highlight(bookID: bookID, locatorData: locatorData, selectedText: text, color: color, note: note)
+                let newHighlight = Highlight(
+                    bookID: bookID, 
+                    locatorData: locatorData, 
+                    selectedText: text,
+                    color: color,
+                    note: note
+                )
                 
                 // Add to the top-level highlights array
                 dataLock.lock()

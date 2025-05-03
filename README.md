@@ -30,6 +30,7 @@ Created by Jimi Olaoya.
 *   Bookmark list display and navigation.
 *   In-book search with result highlighting.
 *   Highlighting text selections (creation, saving, loading, display).
+*   Decorative underline highlights for selected text via the highlighter button.
 
 ### Planned / Ideas
 

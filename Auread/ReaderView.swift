@@ -150,6 +150,20 @@ struct ReaderView: View {
                                     .background(.ultraThinMaterial)
                                     .clipShape(Circle())
                             }
+                            .padding(.top) // Adjusted padding
+                            
+                            // Add highlight button
+                            Button(action: {
+                                // Directly call on the StateObject wrapper
+                                _model.wrappedValue.attemptHighlightCurrentSelection()
+                            }) {
+                                Image(systemName: "highlighter")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .padding(12)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain) // Ensure tap feedback
                             .padding([.top, .trailing]) // Position top-right
                         }
 
@@ -213,7 +227,7 @@ struct ReaderView: View {
                     showSearchView: $showSearchView, // <- ADDED: Pass binding
                     navigateToProgression: navigateToProgression 
                 )
-                 .presentationDetents([.height(320)]) // Adjust height for new controls
+                 .presentationDetents([.height(360)]) // Adjust height for new controls
             }
             // Keep existing ToC sheet
             .sheet(isPresented: $showTableOfContents) {

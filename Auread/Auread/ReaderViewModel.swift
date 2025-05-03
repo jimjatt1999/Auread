@@ -241,17 +241,23 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
         // We receive the tap point in the navigator's view coordinate system.
         log(.info, "User tapped content at point: \(point)")
         
-        // --- TODO: Check if this tap hit an existing highlight decoration --- 
-        // This is the complex part. We need to:
-        // 1. Get the currently visible highlight decorations and their frames.
-        //    OR use JavaScript to detect the tapped element's ID.
-        // 2. Check if `point` intersects with any highlight frame.
-        // 3. If it does, get the highlight ID and call handleHighlightTap(id: frame:).
+        // Check if tap is on a highlight decoration
+        // This is implemented in the DecorableNavigator.onDecorationActivated method
+        // Readium will automatically detect if the tap was on a decoration and call
+        // the appropriate delegate method.
         
-        // For now, just logging the tap.
-        // If the tap *didn't* hit a highlight, maybe we want to toggle controls?
-        // This might conflict with the center tap zone logic in ReaderView's Coordinator.
-        // Needs careful consideration of gesture handling priority.
+        // If we get here without a highlight being detected, it's a regular tap
+        // This might be used to toggle controls in the ReaderView
+    }
+    
+    // Implementation for the DecorableNavigator decoration interaction
+    func navigator(_ navigator: DecorableNavigator, didActivateDecoration decoration: Decoration, at point: CGPoint?, in frame: CGRect?) {
+        log(.info, "Decoration activated: \(decoration.id) at \(String(describing: point)) in frame \(String(describing: frame))")
+        
+        // Only show the highlight menu for user highlights stored in the library
+        if let uuid = UUID(uuidString: decoration.id), bookLibrary.getHighlight(id: uuid) != nil {
+            handleHighlightTap(id: decoration.id, frame: frame)
+        }
     }
     
     // MARK: - Helpers
@@ -408,7 +414,7 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
         guard let navigator = navigatorViewController else { return }
         
         log(.info, "Applying search highlight decoration: \(id)")
-        let style = Decoration.Style.highlight(tint: .yellow.withAlphaComponent(0.5), isActive: true) // Use a semi-transparent yellow
+        let style = Decoration.Style.underline(tint: .yellow, isActive: true) // Use stylistic underline for search highlights
         let decoration = Decoration(id: id, locator: locator, style: style)
         
         Task {
@@ -436,6 +442,22 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
     }
 
     // MARK: - Highlighting Functionality
+
+    /// Called by UI to attempt highlighting the current text selection
+    func attemptHighlightCurrentSelection() {
+        guard let navigator = navigatorViewController else {
+            log(.warning, "Navigator not available for highlight attempt.")
+            return
+        }
+        Task {
+            if let selection = navigator.currentSelection {
+                log(.info, "Attempting to create highlight at locator: \(selection.locator)")
+                await self.createHighlightFromSelection(locator: selection.locator)
+            } else {
+                log(.warning, "No text selection found for highlight attempt.")
+            }
+        }
+    }
 
     // Called from Coordinator when "Highlight" menu item is tapped
     func createHighlightFromSelection(locator: Locator) async {
@@ -479,7 +501,7 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
         let color = UIColor(named: highlight.color) ?? .yellow // Use named color or fallback
         
         log(.info, "Applying user highlight decoration: \(highlight.id)")
-        let style = Decoration.Style.highlight(tint: color.withAlphaComponent(0.4), isActive: true) // Slightly less alpha than search?
+        let style = Decoration.Style.underline(tint: color, isActive: true) // Decorative underline style for user highlights
         let decoration = Decoration(id: highlight.id.uuidString, locator: locator, style: style)
         
         Task {
@@ -511,8 +533,8 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
             if let position = BookPosition.decode(from: highlight.locatorData) {
                 let locator = position.asLocator()
                 let color = UIColor(named: highlight.color) ?? .yellow
-                let style = Decoration.Style.highlight(tint: color.withAlphaComponent(0.4), isActive: true)
-                 decorations.append(Decoration(id: highlight.id.uuidString, locator: locator, style: style))
+                let style = Decoration.Style.underline(tint: color, isActive: true) // Decorative underline style for user highlights
+                decorations.append(Decoration(id: highlight.id.uuidString, locator: locator, style: style))
             } else {
                 log(.error, "Failed to decode BookPosition for highlight \(highlight.id) during bulk load.")
             }
