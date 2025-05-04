@@ -31,6 +31,10 @@ Created by Jimi Olaoya.
 *   In-book search with result highlighting.
 *   Highlighting text selections (creation, saving, loading, display).
 *   Decorative underline highlights for selected text via the highlighter button.
+*   Highlight timeline view with chronological organization and filtering options.
+*   Modern, Apple-style minimalist UI with grid layout for library.
+*   Hold-to-delete books from the library grid.
+*   Consistent reader presentation from both library and timeline views (fixed black borders and theme issues).
 
 ### Planned / Ideas
 

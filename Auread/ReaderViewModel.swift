@@ -147,6 +147,9 @@ class ReaderViewModel: NSObject, ObservableObject, Loggable, EPUBNavigatorDelega
                  }
              )
              print("ViewModel: Applied theme \(settings.theme) and font size \(settings.fontSize * 100)% using applyPreferences")
+             
+             // Ensure settings are persisted
+             settingsManager.saveSettings(settings: settings)
          }
      }
 

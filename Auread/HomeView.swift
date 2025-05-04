@@ -6,81 +6,82 @@ import ReadiumInternal // <-- Add
 import ReadiumOPDS // <-- Add (for DefaultHTTPClient)
 
 struct HomeView: View {
-    // Remove redundant AppStorage and State - Use BookLibrary as single source of truth
-    // @AppStorage("books") private var booksData: Data = Data()
-    // @State private var books: [Book] = [] // Use Book directly
     @EnvironmentObject var bookLibrary: BookLibrary
-    @EnvironmentObject var settingsManager: SettingsManager // Add settings manager
+    @EnvironmentObject var settingsManager: SettingsManager
 
     @State private var documentPickerIsPresented = false
-    @State private var selectedBookForReader: Book? // Use Book directly
-    @State private var readerIsPresented = false
-    @State private var searchText = "" // State for search text
+    @State private var selectedBookForReader: Book?
+    @State private var navigateToReader = false
+    @State private var searchText = ""
+    @State private var selectedTab = 0 // 0 = Library, 1 = Highlights
 
-    // Computed property for filtering based on search text - Filter bookLibrary directly
+    // Computed property for filtering based on search text
     var filteredBooks: [Book] {
         if searchText.isEmpty {
             return bookLibrary.books
         } else {
-            return bookLibrary.books.filter { $0.title.localizedCaseInsensitiveContains(searchText) || ($0.author ?? "").localizedCaseInsensitiveContains(searchText) }
+            return bookLibrary.books.filter { 
+                $0.title.localizedCaseInsensitiveContains(searchText) || 
+                ($0.author ?? "").localizedCaseInsensitiveContains(searchText) 
+            }
         }
     }
 
     var body: some View {
+        TabView(selection: $selectedTab) {
+            // Library Tab
+            libraryTab
+                .tabItem {
+                    Label("Library", systemImage: "books.vertical")
+                }
+                .tag(0)
+            
+            // Highlights Tab
+            HighlightTimelineView()
+                .tabItem {
+                    Label("Highlights", systemImage: "highlighter")
+                }
+                .tag(1)
+        }
+        .opacity(Environment(\.hideTabBar).wrappedValue ? 0 : 1) // Hide tab bar when needed
+    }
+    
+    var libraryTab: some View {
         NavigationView {
-            List {
-                // Use filteredBooks here
+            VStack(spacing: 0) {
+                if filteredBooks.isEmpty {
+                    emptyLibraryView
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: [
+                            GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 20)
+                        ], spacing: 24) {
                 ForEach(filteredBooks) { book in
-                    // Get progress for the current book
-                    let progress = bookLibrary.getProgression(for: book.id)
-                    BookItemView(
-                        title: book.title,
-                        author: book.author,
-                        coverImagePath: book.coverImagePath,
-                        progress: progress // Pass progress to the view
-                    )
+                                ModernBookItemView(book: book)
+                                    .frame(height: 250)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         selectedBookForReader = book
-                        // Attempt to gain access before presenting reader
-                        // Note: This access is short-lived, ReaderView needs its own.
                         _ = book.getURL()?.startAccessingSecurityScopedResource()
-                        readerIsPresented = true
+                                        navigateToReader = true
                     }
-                    .listRowInsets(EdgeInsets())
-                    .padding(.horizontal)
-                }
-                .onDelete(perform: deleteBook) // Allow swipe to delete
-
-                // Placeholder if no books are added or filtered out
-                if filteredBooks.isEmpty {
-                    if bookLibrary.books.isEmpty {
-                        // Show initial prompt if library is completely empty
-                        VStack {
-                            Spacer()
-                            Text("Library is empty.")
-                                .font(.title2)
-                                .foregroundColor(.gray)
-                            Button("Add your first EPUB") {
-                                documentPickerIsPresented = true
+                                    .contextMenu {
+                                        Button(role: .destructive) {
+                                            deleteBook(book: book)
+                                        } label: {
+                                            Label("Delete Book", systemImage: "trash")
+                                        }
+                                    }
                             }
-                            .buttonStyle(.borderedProminent)
-                            .padding(.top)
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                        .listRowSeparator(.hidden)
-                    } else {
-                        // Show if search yields no results
-                        Text("No books found matching \"\(searchText)\".")
-                            .foregroundColor(.gray)
-                            .listRowSeparator(.hidden)
+                            }
+                        .padding(.horizontal)
+                        .padding(.top, 10)
                     }
+                    .padding(.top)
                 }
             }
-            .listStyle(.plain) // Use plain style to remove default list background/inset
-            .navigationTitle("All Books") // Match screenshot title
-            .searchable(text: $searchText, prompt: "Search books by title or author") // Add search bar
+            .navigationTitle("Library")
+            .searchable(text: $searchText, prompt: "Search library")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -89,42 +90,116 @@ struct HomeView: View {
                         Image(systemName: "plus")
                     }
                 }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    EditButton() // Add standard Edit button for deletion
-                }
             }
             .fileImporter(
                 isPresented: $documentPickerIsPresented,
                 allowedContentTypes: [UTType.epub],
                 allowsMultipleSelection: false
             ) { result in
-                // Wrap the async function call in a Task
                 Task {
                     await handleFileImport(result: result)
                 }
             }
-            .fullScreenCover(item: $selectedBookForReader) { book in
-                // Resolve URL just before presenting ReaderView
-                if let url = book.getURL() {
-                    // Get the initial locator from BookLibrary
-                    let initialLocator = bookLibrary.getPosition(for: book.id)
-                    // Pass settingsManager to ReaderView initializer
-                    ReaderView(fileURL: url, bookID: book.id, bookLibrary: bookLibrary, settingsManager: settingsManager, initialLocator: initialLocator)
-                        .environmentObject(bookLibrary)
-                        .environmentObject(settingsManager) // Also pass to environment if needed downstream
-                } else {
-                    // Handle error: Could not resolve URL from bookmark
-                    Text("Error: Could not open book. Please try importing it again.")
-                        .padding()
-                        .onAppear {
-                            // Attempt to remove the faulty book entry?
-                        }
+            .background(
+                NavigationLink(
+                    destination: buildReaderDestination()
+                        .navigationBarHidden(true)
+                        .hideTabBar(),
+                    isActive: $navigateToReader
+                ) {
+                    EmptyView()
                 }
+                .hidden()
+            )
+        }
+    }
+    
+    @ViewBuilder
+    private func buildReaderDestination() -> some View {
+        if let book = selectedBookForReader,
+           let url = book.getURL() {
+            
+                    let initialLocator = bookLibrary.getPosition(for: book.id)
+            
+            ReaderView(fileURL: url,
+                      bookID: book.id,
+                      bookLibrary: bookLibrary,
+                      settingsManager: settingsManager,
+                      initialLocator: initialLocator)
+                        .environmentObject(bookLibrary)
+                .environmentObject(settingsManager)
+                .navigationBarHidden(true)
+                        .onAppear {
+                    if let loc = initialLocator {
+                        print("[HomeView] Reader navigating with:")
+                        print("  - Href: \(loc.href)")
+                        print("  - Progression: \(loc.locations.progression ?? -1)")
+                    }
+                }
+                .onDisappear {
+                    navigateToReader = false
+                    selectedBookForReader = nil
+                }
+        } else {
+            Text("Error: Book not available")
+                .onAppear {
+                    navigateToReader = false
+                    selectedBookForReader = nil
+                }
+        }
+    }
+    
+    var emptyLibraryView: some View {
+        VStack {
+            Spacer()
+            
+            Image(systemName: "books.vertical")
+                .font(.system(size: 64))
+                .foregroundColor(.gray.opacity(0.7))
+                .padding()
+            
+            Text("Your library is empty")
+                .font(.title2)
+                .foregroundColor(.primary)
+                .padding(.top)
+            
+            Text("Add your first book to get started")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .padding(.top, 4)
+            
+            Button {
+                documentPickerIsPresented = true
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                    Text("Add Book")
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(Color.accentColor)
+                .foregroundColor(.white)
+                .cornerRadius(20)
+                .shadow(radius: 2, y: 1)
             }
+            .padding(.top, 30)
+            
+            Spacer()
         }
     }
 
-    // Make the function async
+    // Helper function to delete a specific book object
+    private func deleteBook(book: Book) {
+        // Find the index in the main library array
+        if let index = bookLibrary.books.firstIndex(where: { $0.id == book.id }) {
+            // Call BookLibrary's delete method using an IndexSet
+            bookLibrary.deleteBook(at: IndexSet(integer: index))
+        } else {
+            print("Error: Could not find book \(book.title) to delete.")
+        }
+    }
+    
+    // Same file import handling as before
     private func handleFileImport(result: Result<[URL], Error>) async {
         switch result {
         case .success(let urls):
@@ -133,20 +208,16 @@ struct HomeView: View {
                 print("Failed initial access for bookmark: \(url)")
                 return
             }
-            defer { url.stopAccessingSecurityScopedResource() } // Stop access after scope exits
+            defer { url.stopAccessingSecurityScopedResource() }
 
             do {
-                // Generate a new UUID for this book (used for saving cover)
                 let newID = UUID()
-                // Create bookmark data without .withSecurityScope for iOS
                 let bookmarkData = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
 
-                // --- Metadata Extraction ---
                 var extractedTitle = url.deletingPathExtension().lastPathComponent
                 var extractedAuthor: String? = nil
                 var extractedCoverPath: String? = nil
 
-                // Create temporary Readium components for metadata extraction
                 let tempHttpClient = DefaultHTTPClient()
                 let tempAssetRetriever = AssetRetriever(httpClient: tempHttpClient)
                 let tempOpener = PublicationOpener(parser: EPUBParser(), contentProtections: [])
@@ -162,7 +233,7 @@ struct HomeView: View {
                     case .success(let publication):
                         extractedTitle = publication.metadata.title ?? extractedTitle
                         extractedAuthor = publication.metadata.authors.first?.name
-                        // Extract cover image (UIImage?) using Readium API
+                        
                         let coverResult = await publication.cover()
                         switch coverResult {
                         case .success(let uiImageOptional):
@@ -180,9 +251,7 @@ struct HomeView: View {
                 case .failure:
                     break
                 }
-                // --- End Metadata Extraction ---
 
-                // Add book using extracted metadata and cover
                 addBookToList(id: newID, title: extractedTitle, author: extractedAuthor, coverImagePath: extractedCoverPath, bookmarkData: bookmarkData)
 
             } catch {
@@ -194,7 +263,6 @@ struct HomeView: View {
         }
     }
 
-    // Helper function to add book and save
     private func addBookToList(id: UUID = UUID(), title: String, author: String?, coverImagePath: String?, bookmarkData: Data) {
         let newBook = Book(
             id: id,
@@ -203,38 +271,16 @@ struct HomeView: View {
             fileURLBookmark: bookmarkData,
             coverImagePath: coverImagePath
         )
-        // Avoid duplicates - Check bookLibrary directly
+        
         if !bookLibrary.books.contains(where: { $0.fileURLBookmark == newBook.fileURLBookmark }) {
-            // Add to list on main thread - Call bookLibrary method
             DispatchQueue.main.async {
-                bookLibrary.addBook(newBook) // Add directly to BookLibrary
+                bookLibrary.addBook(newBook)
             }
         } else {
             print("Book already in library.")
         }
     }
 
-    // Delete book from the list - Operate on bookLibrary directly
-    private func deleteBook(at offsets: IndexSet) {
-        // Get the actual books to remove based on the filtered list indices
-        let booksToRemove = offsets.map { filteredBooks[$0] }
-        
-        // Find the corresponding indices in the main bookLibrary.books array
-        let indicesInLibrary = booksToRemove.compactMap { bookToRemove in
-            bookLibrary.books.firstIndex(where: { $0.id == bookToRemove.id })
-        }
-        
-        // Ensure indices are valid before removing
-        guard !indicesInLibrary.isEmpty else { return }
-        
-        // Create an IndexSet from the library indices
-        let indexSetInLibrary = IndexSet(indicesInLibrary)
-        
-        // Call BookLibrary's delete method
-        bookLibrary.deleteBook(at: indexSetInLibrary)
-    }
-
-    // Helper to save cover data to disk and return file path
     private func saveCoverData(_ data: Data, bookID: UUID) -> String? {
         let filename = "cover_\(bookID.uuidString).png"
         if let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
@@ -248,6 +294,85 @@ struct HomeView: View {
             }
         }
         return nil
+    }
+}
+
+struct ModernBookItemView: View {
+    let book: Book
+    
+    @EnvironmentObject var bookLibrary: BookLibrary
+    
+    var progress: Double? {
+        return bookLibrary.getProgression(for: book.id)
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Cover Image
+            ZStack(alignment: .bottomLeading) {
+                if let path = book.coverImagePath,
+                   let uiImage = UIImage(contentsOfFile: path) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 180)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                } else {
+                    // Placeholder with gradient background
+                    LinearGradient(
+                        colors: [.gray.opacity(0.7), .gray.opacity(0.5)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(height: 180)
+                    .overlay(
+                        Image(systemName: "book.closed.fill")
+                            .font(.system(size: 40, weight: .light))
+                            .foregroundColor(.white.opacity(0.6))
+                    )
+                }
+                
+                // Progress indicator at the bottom of the cover
+                if let progress = progress, progress > 0 {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.8))
+                            .frame(width: geo.size.width * progress, height: 4)
+                    }
+                    .frame(height: 4)
+                }
+            }
+            .cornerRadius(6)
+            .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
+            
+            // Book info
+            VStack(alignment: .leading, spacing: 2) {
+                Text(book.title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .padding(.top, 6)
+                
+                if let author = book.author {
+                    Text(author)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                // Progress as text
+                if let progress = progress, progress > 0 {
+                    Text("\(Int(progress * 100))% read")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 1)
+                }
+            }
+            .padding(.horizontal, 4)
+            
+            Spacer()
+        }
     }
 }
 

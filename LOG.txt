@@ -1,6 +1,21 @@
 Auread Project Development Log
 ================================
 
+Date: 2024-07-21
+
+== ReaderView Navigation Consistency Fix ==
+
+*   Goal: Fix inconsistency between ReaderView launched from library vs. timeline.
+*   Issue: ReaderView launched from library showed black borders and theme inconsistencies, while timeline launch worked perfectly.
+*   Diagnosis: Different presentation methods used between views:
+    *   Library used `fullScreenCover(item:)` modal presentation
+    *   Timeline used `NavigationLink` within NavigationView
+*   Fix:
+    *   Modified `HomeView.swift` to replace `fullScreenCover` with `NavigationLink`
+    *   Added `.navigationBarHidden(true)` modifier to the ReaderView in HomeView for consistency
+    *   Added appropriate `onAppear` and `onDisappear` handling for proper initialization and cleanup
+*   Result: ReaderView now appears consistent regardless of where it's launched from, with proper full-screen display and theme application.
+
 Date: 2024-07-20
 
 == Appearance Settings Implementation ==
@@ -349,5 +364,152 @@ Date: 2024-07-19 (Approximate Start of Session)
 
 **Resolution:**
 *   Removed the function block to prevent tap handling logic from running within the ViewModel.
+
+**Date:** 2024-07-28 11:50 AM
+
+**Goal:** Address missing highlight visibility and add creation feedback.
+
+**Changes:**
+*   Added detailed logging in `ReaderViewModel.swift` within `attemptHighlightCurrentSelection` and `applyHighlightDecoration` to trace the highlight creation flow (checking selection, decoding, applying decoration).
+*   Integrated `UIImpactFeedbackGenerator` in `ReaderViewModel.swift`.
+*   Triggered haptic feedback (`.medium`) within `applyHighlightDecoration` upon successful `navigator.apply` call.
+*   Adjusted `attemptHighlightCurrentSelection` to log and return early if no text selection exists.
+
+**Issues Encountered:** User reported highlights created via button were not visible.
+
+**Debugging:** Added logging to check `navigator.currentSelection`, `BookPosition` decoding, and `navigator.apply` success/failure. Added haptic feedback as an indicator of successful application attempt.
+
+**Resolution:** Logging and feedback added. Next step is user testing and log analysis if issue persists.
+
+**Date:** 2024-07-28 11:55 AM
+
+**Goal:** Prevent system Light/Dark mode from affecting the ReaderView appearance.
+
+**Changes:**
+*   **`Auread/ReaderView.swift`:** Added the `.colorScheme(.light)` modifier to the root `GeometryReader`.
+*   This forces all SwiftUI elements within the `ReaderView` (controls, overlays, presented sheets) to use the light appearance, irrespective of the device's system setting.
+*   The EPUB content rendering theme (Light/Sepia/Dark) remains controlled solely by the `settingsManager.currentSettings.readerTheme` via `ReaderViewModel.applySettings` and Readium's `EPUBPreferences`.
+
+**Issues Encountered:** None.
+
+**Resolution:** Reader view SwiftUI controls are now decoupled from the system appearance mode, defaulting to light. Readium content theme remains controlled by in-app settings.
+
+**Date:** 2024-07-28 12:05 PM
+
+**Goal:** Add visual confirmation (toast notification) upon successful text highlighting.
+
+**Changes:**
+*   **`Auread/ToastView.swift` (New File):** Created a reusable SwiftUI view to display brief, auto-dismissing overlay messages with an optional icon.
+*   **`Auread/Auread/ReaderViewModel.swift`:**
+    *   Added `@Published` state variables: `showToast`, `toastMessage`, `toastIconName`.
+    *   Modified `applyHighlightDecoration`: On successful decoration application, it now sets the toast state variables (`toastMessage = "Highlighted"`, `toastIconName = "checkmark.circle.fill"`, `showToast = true`) alongside triggering haptic feedback.
+*   **`Auread/ReaderView.swift`:** Added an `.overlay(alignment: .top)` modifier to the main `GeometryReader` to display the `ToastView` when `model.showToast` is true.
+
+**Issues Encountered:** None.
+
+**Resolution:** A toast notification saying "Highlighted" with a checkmark icon now appears briefly at the top of the screen when a highlight is successfully created via the button, providing clearer user feedback.
+
+**Date:** 2024-07-28 12:10 PM
+
+**Goal:** Ensure the entire application UI ignores system Light/Dark mode and defaults to light appearance.
+
+**Changes:**
+*   **`Auread/AureadApp.swift`:** Added the `.colorScheme(.light)` modifier to the root `HomeView()` presented within the `WindowGroup`.
+*   This extends the light mode enforcement applied previously to `ReaderView` to cover the entire application, including the library view (`HomeView`) and any other standard SwiftUI controls.
+
+**Issues Encountered:** None.
+
+**Resolution:** The entire application interface is now decoupled from the system appearance mode and will consistently use the light color scheme.
+
+**Date:** 2024-07-28 12:20 PM
+
+**Goal:** Add a highlights timeline feature and redesign the library with a cleaner, Apple-style minimalist UI.
+
+**Changes:**
+*   **`Auread/HighlightTimelineView.swift` (New File):** Created a dedicated view for displaying highlights across all books:
+    *   Organized highlights chronologically (Today, Yesterday, This Week, Earlier) 
+    *   Implemented grouping options (by Date, Book, or Color)
+    *   Added search functionality to filter highlights by text or notes
+    *   Designed modern `HighlightRow` with color indicator and book context
+    *   Added navigation to reopen books directly at highlight positions
+
+*   **`Auread/HomeView.swift`:** Completely redesigned with modern, minimalist aesthetic:
+    *   Implemented tab-based navigation (Library and Highlights tabs)
+    *   Replaced list view with modern grid layout using `LazyVGrid`
+    *   Created more visually appealing `ModernBookItemView` with:
+        *   Larger cover images
+        *   Subtle progress indicator at bottom of cover
+        *   Clean typography with proper spacing
+        *   Elegant placeholder with gradient for books without covers
+    *   Improved empty state with large icon and clear call-to-action button
+
+**Issues Encountered:** None.
+
+**Resolution:** The application now has a dedicated timeline feature for reviewing highlights across all books, and a more modern, visually appealing library interface that follows Apple's design language.
+
+**Date:** 2024-07-28 12:35 PM
+
+**Goal:** Fix highlight navigation, address UTType warning, refine library UI, and implement hold-to-delete.
+
+**Changes:**
+*   **`Auread/HighlightTimelineView.swift`:** Refactored `.fullScreenCover` modifier:
+    *   Attempts URL resolution and starts security access *within* the cover's content closure.
+    *   Provides an error view if URL resolution or access fails.
+    *   Explicitly stops security access in `.onDisappear` of the `ReaderView`.
+*   **`Info.plist` (Manual Change Required):** Provided XML snippet to declare the `org.idpf.epub-container` UTType and document type association. This fixes the system warning and might improve file handling reliability.
+*   **`Auread/HomeView.swift`:**
+    *   **UI Refinement (`ModernBookItemView`):** Adjusted fonts (title/author), placeholder icon styling, progress bar color (accent), corner radius, shadow, and padding for a cleaner look.
+    *   **Hold-to-Delete:** Removed the `EditButton` from the toolbar. Added a `.contextMenu` to `ModernBookItemView` containing a destructive "Delete Book" button. Added `deleteBook(book:)` helper function to handle deletion logic.
+
+**Issues Addressed:**
+*   Highlights timeline navigation failed with "Unable to open book" (likely stale security bookmarks).
+*   System warning about missing UTType declaration in `Info.plist`.
+*   User request for further library UI refinement.
+*   User request for hold-to-delete functionality.
+
+**Resolution:** Highlight navigation should be more robust with improved error handling. UTType warning resolved via manual `Info.plist` edit. Library UI styling refined. Hold-to-delete implemented via context menu.
+
+**Date:** 2024-07-28 12:50 PM
+
+**Goal:** Debug highlight navigation failure, re-address UTType warning, and refine library UI/UX.
+
+**Changes:**
+*   **Highlight Navigation Debugging:**
+    *   Added detailed logging in `HighlightTimelineView.swift` to print the generated `initialLocator` details before navigation.
+    *   Added detailed logging in `ReaderView.swift` (`.onAppear`) to print the received `initialLocator` details.
+*   **UTType Warning:** Re-emphasized that the `Info.plist` entries for `CFBundleDocumentTypes` and `UTImportedTypeDeclarations` *must* be added manually in Xcode as previously detailed. This is likely related to navigation failures and the persistent warning.
+*   **Library UI Refinement (`ModernBookItemView`):**
+    *   Set cover image frame `maxWidth` to `.infinity` to allow it to fill the grid cell width.
+    *   Reduced `cornerRadius` for a slightly sharper look.
+*   **Hold-to-Delete:** Confirmed that hold-to-delete was implemented in the previous step via `.contextMenu` on `ModernBookItemView`.
+
+**Issues Addressed:**
+*   Highlight timeline navigation still failing (logs added for diagnosis).
+*   Persistent UTType warning (manual Info.plist edit required).
+*   User request for less square book covers.
+*   Clarification on existing hold-to-delete implementation.
+
+**Resolution:** Added logging to diagnose navigation. Requires manual `Info.plist` update. Further refined library item appearance. Hold-to-delete via context menu should be functional.
+
+**Date:** 2024-07-28 1:00 PM
+
+**Goal:** Fix highlight navigation "black screen" issue and improve highlight timeline display.
+
+**Changes:**
+*   **`Auread/HighlightTimelineView.swift`:**
+    *   **Navigation Fix:** Completely replaced `.fullScreenCover` presentation with a hidden `NavigationLink`. This uses a more reliable navigation pattern with SwiftUI's native behavior.
+    *   **Better Error Handling:** Added dedicated validation in `prepareForNavigation()` to verify the highlight and book are valid before attempting navigation.
+    *   **Alert System:** Added alerts for showing error messages when navigation fails.
+    *   **Improved UI:** Enhanced `HighlightRow` to display chapter and page information:
+        *   Extracts chapter title from the `BookPosition` and cleans up common filename artifacts.
+        *   Extracts and shows page number when available.
+        *   Better formatting with clear visual hierarchy.
+
+**Issues Addressed:**
+*   Highlight navigation showing black screen instead of the reader.
+*   Missing chapter and page information in the highlight timeline.
+*   Error handling for highlight navigation issues.
+
+**Resolution:** Highlight navigation should now use a more reliable SwiftUI pattern. The highlight timeline is more informative with chapter and page details. Error handling is more robust with user-friendly alert messages.
 
 --- 

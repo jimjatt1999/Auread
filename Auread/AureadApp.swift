@@ -19,6 +19,7 @@ struct AureadApp: App {
             HomeView()
                 .environmentObject(bookLibrary)
                 .environmentObject(settingsManager)
+                .colorScheme(.light) // Force the entire app UI to use light mode
         }
     }
 }

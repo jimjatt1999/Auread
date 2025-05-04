@@ -33,6 +33,11 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
     @Published var tappedHighlightFrame: CGRect? = nil
     @Published var showHighlightMenu: Bool = false
 
+    // Toast Notification State
+    @Published var showToast: Bool = false
+    @Published var toastMessage: String = ""
+    @Published var toastIconName: String? = nil
+
     // MARK: - Stored Properties
     private let bookID: UUID
     private let bookLibrary: BookLibrary
@@ -49,6 +54,9 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
     private var searchIterator: SearchIterator?
     private var currentSearchTask: Task<Void, Never>?
     private var currentLoadPageTask: Task<Void, Never>?
+
+    // Haptic Feedback Generator
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
 
     // MARK: - Initialization
     init(bookID: UUID, bookLibrary: BookLibrary, settingsManager: SettingsManager) {
@@ -76,6 +84,12 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
                 print("ReaderViewModel: Detected settings change, applying...")
                 self?.applySettings(newSettings)
             }
+
+        // Prepare the feedback generator
+        feedbackGenerator.prepare()
+
+        // Ensure toast state is initially false
+        showToast = false
     }
 
     // MARK: - Public Methods
@@ -450,12 +464,13 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
             return
         }
         Task {
-            if let selection = navigator.currentSelection {
-                log(.info, "Attempting to create highlight at locator: \(selection.locator)")
-                await self.createHighlightFromSelection(locator: selection.locator)
-            } else {
+            guard let selection = navigator.currentSelection else {
                 log(.warning, "No text selection found for highlight attempt.")
+                // Optionally provide user feedback here (e.g., a toast) that no text is selected
+                return
             }
+            log(.info, "Attempting to create highlight at locator: \(selection.locator)")
+            await self.createHighlightFromSelection(locator: selection.locator)
         }
     }
 
@@ -493,23 +508,33 @@ class ReaderViewModel: ObservableObject, EPUBNavigatorDelegate, Loggable {
     private func applyHighlightDecoration(highlight: Highlight) {
         guard let navigator = navigatorViewController else { return }
         guard let position = BookPosition.decode(from: highlight.locatorData) else {
-             log(.error, "Failed to decode BookPosition for highlight \(highlight.id)")
-             return
+            log(.error, "[Highlight Error] Failed to decode BookPosition for highlight \(highlight.id)")
+            return
         }
 
         let locator = position.asLocator() // Get Locator from BookPosition
         let color = UIColor(named: highlight.color) ?? .yellow // Use named color or fallback
         
-        log(.info, "Applying user highlight decoration: \(highlight.id)")
+        log(.debug, "Applying user highlight decoration: \(highlight.id) with color \(highlight.color) at locator: \(locator.href)")
         let style = Decoration.Style.underline(tint: color, isActive: true) // Decorative underline style for user highlights
         let decoration = Decoration(id: highlight.id.uuidString, locator: locator, style: style)
         
         Task {
             do {
                 // Apply decoration in the "userHighlights" group
+                log(.debug, "Calling navigator.apply for highlight decoration: \(decoration.id)")
                 try await navigator.apply(decorations: [decoration], in: "userHighlights")
+                log(.info, "Successfully applied highlight decoration: \(decoration.id)")
+                // Trigger haptic feedback on successful application
+                await MainActor.run {
+                    self.feedbackGenerator.impactOccurred()
+                    // Show success toast
+                    self.toastMessage = "Highlighted"
+                    self.toastIconName = "checkmark.circle.fill"
+                    self.showToast = true
+                }
             } catch {
-                log(.error, "Failed to apply user highlight decoration \(highlight.id): \(error)")
+                log(.error, "[Highlight Error] Failed to apply user highlight decoration \(highlight.id): \(error)")
             }
         }
     }

@@ -206,6 +206,21 @@ struct ReaderView: View {
                     print("ReaderView: Attempting to open with locator: \(locator?.locations.progression ?? -1.0)") // Log loaded locator
                     model.openPublication(at: fileURL, initialLocator: locator)
                 }
+                
+                // --> ADDED LOGGING for received initialLocator <--
+                print("[ReaderView.onAppear] Received initialLocator:")
+                if let loc = initialLocator {
+                    print("  - Href: \(loc.href)")
+                    print("  - Progression: \(loc.locations.progression ?? -1)")
+                    print("  - Total Progression: \(loc.locations.totalProgression ?? -1)")
+                    print("  - Position: \(loc.locations.position ?? -1)")
+                } else {
+                    print("  - InitialLocator is nil")
+                }
+                // -- End Logging --
+
+                // Ensure settings are applied when view appears
+                model.applySettings(settingsManager.currentSettings)
             }
             .onDisappear {
                 // ... (Existing onDisappear logic remains the same) ...
@@ -305,9 +320,20 @@ struct ReaderView: View {
                      EmptyView()
                  }
              }
+            // --- ADDED: Toast Overlay --- 
+            .overlay(alignment: .top) { // Position toast at the top
+                if model.showToast {
+                    ToastView(
+                        message: model.toastMessage, 
+                        iconName: model.toastIconName, 
+                        isShowing: $model.showToast
+                    )
+                }
+            }
             .navigationBarHidden(true)
             .navigationBarBackButtonHidden(true)
         } // End GeometryReader
+        .colorScheme(.light) // Force SwiftUI elements in ReaderView to use light mode always
     }
     
     // MARK: - Navigation Helpers
